@@ -1,0 +1,32 @@
+name: Build LPTest APK
+
+# Builds the Android .apk on GitHub's own Linux runners, using
+# buildozer/python-for-android to fetch and drive the Android SDK/NDK —
+# this is the piece that can't run inside the chat sandbox. Push this repo
+# to GitHub, then either wait for the automatic build on every push to
+# main, or trigger it manually from the Actions tab ("Run workflow").
+# When it finishes, download the .apk from the run's "Artifacts" section.
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build APK with buildozer
+        uses: ArtemSBulgakov/buildozer-action@v1
+        id: buildozer
+        with:
+          command: buildozer android debug
+          buildozer_version: stable
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LPTest-debug-apk
+          path: ${{ steps.buildozer.outputs.filename }}
