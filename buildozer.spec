@@ -26,7 +26,7 @@ android.permissions = READ_EXTERNAL_STORAGE
 # raises the minimum target API required for Play Store submissions.
 android.minapi = 24
 android.api = 34
-android.ndk = 28b
+android.ndk = 25b
 
 android.archs = arm64-v8a, armeabi-v7a
 
