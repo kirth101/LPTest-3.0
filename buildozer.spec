@@ -12,7 +12,7 @@ version = 1.0
 # - kivy: the UI framework this app is built on
 # - pypdf: PDF text extraction (file_parser.py)
 # - python-docx (+ lxml): .docx text extraction (file_parser.py)
-requirements = python3,kivy==2.3.1,pypdf
+requirements = python3==3.11,kivy==2.3.1,pypdf
 
 orientation = portrait
 fullscreen = 0
