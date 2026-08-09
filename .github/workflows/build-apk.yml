@@ -39,7 +39,10 @@ jobs:
           key: buildozer-${{ hashFiles('buildozer.spec') }}
 
       - name: Build APK
+        env:
+          PIP_CONSTRAINT: ${{ github.workspace }}/pip-constraints.txt
         run: |
+          echo "pip==24.0" > pip-constraints.txt
           yes | buildozer -v android debug
 
       - name: Upload APK
