@@ -96,26 +96,58 @@ def _extract_pdf(filepath: str) -> ExtractionResult:
 
 
 def _extract_docx(filepath: str) -> ExtractionResult:
-    try:
-        import docx
-    except ImportError:
-        return ExtractionResult(error="DOCX support isn't installed. Run: pip install python-docx")
+    """DOCX extraction using only the Python standard library (zipfile +
+    xml.etree.ElementTree) instead of python-docx/lxml. This sidesteps
+    lxml entirely, which matters a lot for the Android build: lxml ships
+    a pre-generated C extension source file that's incompatible with the
+    Python C-API used by recent python-for-android builds (a known,
+    long-standing issue in its Android build recipe -- 'ma_version_tag'
+    was removed from PyDictObject and lxml's bundled etree.c still
+    references it), so pulling lxml in as a dependency broke every
+    Android build attempt. Plain XML parsing of word/document.xml covers
+    exactly what this app needs -- paragraph text plus heading detection
+    -- without needing any compiled dependency at all, which also makes
+    installs lighter/faster everywhere, not just on Android."""
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
     try:
-        document = docx.Document(filepath)
-    except Exception as e:
+        with zipfile.ZipFile(filepath) as zf:
+            with zf.open("word/document.xml") as f:
+                tree = ET.parse(f)
+    except (zipfile.BadZipFile, KeyError, ET.ParseError, OSError) as e:
         return ExtractionResult(error=f"Couldn't open this Word document ({e}).")
+
+    body = tree.getroot().find(f"{W_NS}body")
+    if body is None:
+        return ExtractionResult(error="This document has no readable text (it may only contain images).")
 
     result = ExtractionResult()
     parts = []
     offset = 0
-    for para in document.paragraphs:
-        text = para.text.strip()
+    for para in body.findall(f"{W_NS}p"):
+        # Runs (<w:r><w:t>...</w:t></w:r>) hold the actual visible text;
+        # join every run in the paragraph in document order.
+        text = "".join(node.text or "" for node in para.iter(f"{W_NS}t")).strip()
         if not text:
             continue
-        style_name = (para.style.name if para.style else "") or ""
-        if style_name.lower().startswith("heading"):
+
+        style_id = ""
+        ppr = para.find(f"{W_NS}pPr")
+        if ppr is not None:
+            pstyle = ppr.find(f"{W_NS}pStyle")
+            if pstyle is not None:
+                style_id = pstyle.get(f"{W_NS}val", "") or ""
+
+        # Word's built-in heading styles use styleIds like "Heading1",
+        # "Heading2", "Title" regardless of the document's display
+        # language, so this check doesn't depend on python-docx's
+        # human-readable style-name lookup.
+        if style_id.lower().startswith("heading") or style_id.lower() == "title":
             result.headings.append((text, offset))
+
         parts.append(text)
         offset += len(text) + 1
 
