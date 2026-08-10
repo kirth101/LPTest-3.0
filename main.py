@@ -521,13 +521,12 @@ class LPTestApp(App):
         if platform == "android":
             try:
                 from plyer import filechooser
-                filechooser.open_file(
-                    on_selection=self._on_android_file_selected,
-                    filters=[f"*{e}" for e in SUPPORTED_EXT],
-                )
+                filechooser.open_file(on_selection=self._on_android_file_selected)
                 return
-            except Exception:
-                pass  # fall through to the desktop-style picker as a backup
+            except Exception as e:
+                print(f"LPTest: plyer file picker failed to open: {e}")
+                self.speak("Couldn't open the file picker. Trying the backup file browser.")
+                # fall through to the desktop-style picker as a backup
         self._browse_file_desktop()
 
     def _on_android_file_selected(self, selection):
@@ -539,7 +538,21 @@ class LPTestApp(App):
         if not selection:
             self.speak("No file selected.")
             return
-        self.load_file(selection[0])
+        path = selection[0]
+        # Some content providers (Google Drive, other cloud-backed apps)
+        # don't expose a real filesystem path, so plyer can hand back
+        # None here instead of a usable path. Guessing wrong and passing
+        # that straight to file_parser.py used to crash the whole app --
+        # os.path.exists(None) raises a TypeError, uncaught, with no
+        # console visible on a phone to explain why. Fail soft instead.
+        if not path or not isinstance(path, str) or not os.path.exists(path):
+            self._fail_load(
+                "Couldn't access that file directly (this can happen with files from "
+                "cloud storage apps). Please try a file saved on your device, e.g. in "
+                "Downloads."
+            )
+            return
+        self.load_file(path)
 
     def _browse_file_desktop(self):
         """Kivy's own in-window file browser. Used on desktop, where a
@@ -584,35 +597,47 @@ class LPTestApp(App):
         self.speak(message)
 
     def _load_file_now(self, path: str):
-        result = extract_text(path)
-        if result.error:
-            self._fail_load(result.error)
-            return
-
-        self.filepath = path
-        self.current_quiz_filename = os.path.basename(path)
-        note = (result.warning + "\n") if result.warning else ""
-
-        existing = detect_existing_qa(result.text)
-        if existing:
-            questions = fill_missing_pieces_offline(existing, result.text)
-            if questions:
-                self.mode_note = note + "Using your file's own questions."
-                self.offer_count_select(questions)
+        # Broad guard by design: this runs from a Clock callback with no
+        # console visible on a phone to see a traceback on, so an
+        # unexpected error here (a corrupt file, a permission hiccup, an
+        # edge case in a third-party parsing library) must never be
+        # allowed to propagate and take down the whole app -- it should
+        # surface as a normal, recoverable on-screen/spoken error instead.
+        try:
+            result = extract_text(path)
+            if result.error:
+                self._fail_load(result.error)
                 return
 
-        chunks = chunk_text(result.text, result.headings)
-        questions, skipped = generate_questions(chunks, result.text)
-        if not questions:
-            self._fail_load(
-                "We couldn't find enough distinct facts in this file to build a fair "
-                "quiz (need at least 4 distinct facts). Try a longer or more detailed file."
-            )
-            return
+            self.filepath = path
+            self.current_quiz_filename = os.path.basename(path)
+            note = (result.warning + "\n") if result.warning else ""
 
-        skip_note = f" ({len(skipped)} section(s) skipped.)" if skipped else ""
-        self.mode_note = note + "Questions generated from your file." + skip_note
-        self.offer_count_select(questions)
+            existing = detect_existing_qa(result.text)
+            if existing:
+                questions = fill_missing_pieces_offline(existing, result.text)
+                if questions:
+                    self.mode_note = note + "Using your file's own questions."
+                    self.offer_count_select(questions)
+                    return
+
+            chunks = chunk_text(result.text, result.headings)
+            questions, skipped = generate_questions(chunks, result.text)
+            if not questions:
+                self._fail_load(
+                    "We couldn't find enough distinct facts in this file to build a fair "
+                    "quiz (need at least 4 distinct facts). Try a longer or more detailed file."
+                )
+                return
+
+            skip_note = f" ({len(skipped)} section(s) skipped.)" if skipped else ""
+            self.mode_note = note + "Questions generated from your file." + skip_note
+            self.offer_count_select(questions)
+        except Exception as e:
+            print(f"LPTest: unexpected error while reading file {path!r}: {e}")
+            self._fail_load(
+                "Something went wrong reading that file. Please try a different file."
+            )
 
     # -- question-count selection ------------------------------------------
     def offer_count_select(self, questions: list[dict]):
