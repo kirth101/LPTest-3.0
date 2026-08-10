@@ -115,12 +115,38 @@ KV = """
             pos: self.pos
             size: self.size
             radius: [dp(8)]
+
+<IconButton>:
+    text_size: self.size
+    halign: 'center'
+    valign: 'middle'
+    canvas.before:
+        Color:
+            rgba: self.bg_color
+        Ellipse:
+            pos: self.pos
+            size: self.size
 """
 Builder.load_string(KV)
 
 
 class PanelButton(Button):
     bg_color = ListProperty(PANEL_BG)
+
+
+class IconButton(ButtonBehavior, Label):
+    """Small round icon button -- used for the Home / Speak controls that
+    float in the top-right corner of each in-quiz screen so a screen-
+    reader user (or anyone) can always get back home or hear the current
+    screen again, from a predictable, fixed spot."""
+    bg_color = ListProperty(ORANGE)
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("size_hint", (None, None))
+        kwargs.setdefault("size", (dp(44), dp(44)))
+        kwargs.setdefault("color", (1, 1, 1, 1))
+        kwargs.setdefault("font_size", sp(20))
+        super().__init__(**kwargs)
 
 
 class OptionButton(ButtonBehavior, Label):
@@ -158,6 +184,25 @@ def option_font_size(options: list[str]) -> int:
     elif longest <= 90 and total <= 320:
         return 15
     return 14
+
+
+def build_icon_bar(show_home: bool = True) -> BoxLayout:
+    """Floating Home + Speak round icon buttons, anchored top-right. Added
+    as an extra widget on top of a Screen's normal content (Screen behaves
+    like a RelativeLayout, so this just overlaps in its own corner without
+    disturbing the rest of the layout) -- always in the same predictable
+    spot on every screen so it's easy to find without looking."""
+    width = dp(100) if show_home else dp(56)
+    bar = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint=(None, None),
+                     size=(width, dp(44)), pos_hint={"right": 0.97, "top": 0.97})
+    if show_home:
+        home_btn = IconButton(text="\U0001F3E0")
+        home_btn.bind(on_release=lambda *_: App.get_running_app().confirm_go_home())
+        bar.add_widget(home_btn)
+    speak_btn = IconButton(text="\U0001F50A")
+    speak_btn.bind(on_release=lambda *_: App.get_running_app().repeat_current())
+    bar.add_widget(speak_btn)
+    return bar
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +300,7 @@ class CountSelectScreen(Screen):
         self.btns_box.bind(minimum_height=self.btns_box.setter("height"))
         root.add_widget(self.btns_box)
         root.add_widget(BoxLayout())  # spacer
+        self.add_widget(build_icon_bar())
 
     def show_choices(self, choices: list[tuple[str, int]], total: int, mode_note: str):
         self.desc.text = mode_note or f"{total} questions available."
@@ -318,11 +364,88 @@ class QuizScreen(Screen):
         self.next_btn.bind(on_release=lambda *_: App.get_running_app().next_question())
         root.add_widget(self.next_btn)
 
+        self.add_widget(build_icon_bar())
+
         self.option_widgets: list[OptionButton] = []
+
+        # -- swipe-to-navigate / double-tap-to-activate ----------------
+        # Active only while Voice Guidance is on (see on_touch_down/up
+        # below). This layers a simple, TalkBack-style touch exploration
+        # on top of the app -- swipe to move a "focus" between the
+        # options (or the Next button once answered), hear each one
+        # named as focus lands on it, and double-tap anywhere to activate
+        # whichever one is currently focused. Direct taps on a button
+        # still work exactly as before regardless of this -- this is
+        # purely additive, for when the user can't see well enough to
+        # aim a tap at a specific button.
+        self._voice_nav_items: list[tuple[str, object]] = []
+        self._voice_nav_index = 0
+        self._swipe_start = None
+        self._last_tap_time = 0.0
+        self._last_tap_pos = (0.0, 0.0)
+
+    def _set_voice_nav_items(self, items: list[tuple[str, object]]):
+        self._voice_nav_items = items
+        self._voice_nav_index = 0
+
+    def _voice_nav_speak_current(self):
+        app = App.get_running_app()
+        if not app.voice_enabled or not self._voice_nav_items:
+            return
+        label, _callback = self._voice_nav_items[self._voice_nav_index]
+        app.speak(label)
+
+    def _voice_nav_move(self, delta: int):
+        if not self._voice_nav_items:
+            return
+        self._voice_nav_index = (self._voice_nav_index + delta) % len(self._voice_nav_items)
+        self._voice_nav_speak_current()
+
+    def _voice_nav_activate(self):
+        if not self._voice_nav_items:
+            return
+        _label, callback = self._voice_nav_items[self._voice_nav_index]
+        if callback:
+            callback()
+
+    def on_touch_down(self, touch):
+        app = App.get_running_app()
+        if app.voice_enabled and self.collide_point(*touch.pos):
+            self._swipe_start = touch.pos
+        return super().on_touch_down(touch)
+
+    def on_touch_up(self, touch):
+        app = App.get_running_app()
+        if app.voice_enabled and self._swipe_start is not None and self.collide_point(*touch.pos):
+            dx = touch.pos[0] - self._swipe_start[0]
+            dy = touch.pos[1] - self._swipe_start[1]
+            import time as _time
+            now = _time.time()
+            if abs(dx) > dp(40) and abs(dx) > abs(dy):
+                # Horizontal swipe -> move focus. Right = next, left =
+                # previous, matching the usual screen-reader convention.
+                # (Vertical drags fall through untouched below, so normal
+                # scrolling in the question/options areas still works.)
+                self._voice_nav_move(1 if dx > 0 else -1)
+                self._swipe_start = None
+                return True
+            else:
+                same_spot = (abs(touch.pos[0] - self._last_tap_pos[0]) < dp(60) and
+                             abs(touch.pos[1] - self._last_tap_pos[1]) < dp(60))
+                if now - self._last_tap_time < 0.4 and same_spot:
+                    self._voice_nav_activate()
+                    self._last_tap_time = 0.0
+                    self._swipe_start = None
+                    return True
+                self._last_tap_time = now
+                self._last_tap_pos = touch.pos
+        self._swipe_start = None
+        return super().on_touch_up(touch)
 
     def render(self, q: dict, index: int, total: int, mode_note: str, locked: bool,
                chosen: int | None):
         letters = ["a.", "b.", "c.", "d."]
+        spoken_letters = ["A", "B", "C", "D"]
         self.progress_label.text = f"Question {index + 1} of {total}"
         self.mode_label.text = mode_note
         self.question_label.text = q["question"]
@@ -377,6 +500,17 @@ class QuizScreen(Screen):
             self.next_btn.disabled = True
 
         self.next_btn.text = "Finish Quiz" if index == total - 1 else "Next Question"
+
+        app = App.get_running_app()
+        if not locked:
+            self._set_voice_nav_items([
+                (f"Option {spoken_letters[i]}: {q['options'][i] if i < len(q['options']) else ''}",
+                 (lambda idx=i: app.select_option(idx)))
+                for i in range(4)
+            ])
+        else:
+            next_label = "Finish Quiz button" if index == total - 1 else "Next Question button"
+            self._set_voice_nav_items([(next_label, lambda: app.next_question())])
 
 
 # ---------------------------------------------------------------------------
@@ -466,6 +600,7 @@ class LPTestApp(App):
         self._pending_pool: list[dict] = []
         self.locked = False
         self.voice_enabled = True
+        self._count_select_prompt = ""
 
         try:
             quiz_history.configure_storage_dir(self.user_data_dir)
@@ -514,6 +649,85 @@ class LPTestApp(App):
         )
         if self.voice_enabled:
             self.speak("Voice guidance on.")
+
+    def confirm_go_home(self):
+        """The Home icon button. Rather than jumping straight back and
+        silently discarding an in-progress quiz, ask first -- and read
+        the question aloud immediately, since the person tapping this
+        may not be able to see the confirmation dialog that popped up."""
+        self.speak("Go back to the home screen? This will end your current quiz.")
+
+        content = BoxLayout(orientation="vertical", spacing=dp(14), padding=dp(16))
+        msg = Label(
+            text="Go back to the home screen?\nThis will end your current quiz.",
+            color=FG, font_size=sp(15), halign="center", valign="middle",
+        )
+        msg.bind(width=lambda w, *_: setattr(w, "text_size", (w.width, None)))
+        content.add_widget(msg)
+
+        popup = Popup(title="Leave Quiz?", content=content, size_hint=(0.85, 0.4),
+                       auto_dismiss=False)
+
+        btn_row = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(10))
+
+        def do_stay(*_a):
+            popup.dismiss()
+            self.speak("Staying on this screen.")
+
+        def do_leave(*_a):
+            popup.dismiss()
+            self.reset_to_landing()
+
+        stay_btn = PanelButton(text="No, stay here", bg_color=PANEL_BG, font_size=sp(14))
+        stay_btn.bind(on_release=do_stay)
+        leave_btn = PanelButton(text="Yes, go home", bg_color=ORANGE, font_size=sp(14))
+        leave_btn.bind(on_release=do_leave)
+        btn_row.add_widget(stay_btn)
+        btn_row.add_widget(leave_btn)
+        content.add_widget(btn_row)
+
+        popup.open()
+
+    def repeat_current(self):
+        """The Speak icon button. Re-reads whatever the current screen is
+        showing -- the same wording that would have been auto-announced
+        when this screen first appeared, so it works as a general-purpose
+        'say that again' the user can reach for any time."""
+        screen = self.sm.current
+        letters = ["A", "B", "C", "D"]
+
+        if screen == "quiz" and self.questions:
+            q = self.questions[self.current_index]
+            prior = self.user_answers[self.current_index]
+            if prior is None:
+                opts = ". ".join(
+                    f"Option {letters[i]}: {q['options'][i]}"
+                    for i in range(min(4, len(q["options"])))
+                )
+                self.speak(
+                    f"Question {self.current_index + 1} of {len(self.questions)}. "
+                    f"{q['question']} {opts}"
+                )
+            else:
+                correct_idx = q.get("correctIndex")
+                if prior == correct_idx:
+                    msg = "You answered correctly."
+                else:
+                    correct_text = q["options"][correct_idx] if correct_idx is not None else "unknown"
+                    letter = letters[correct_idx] if correct_idx is not None else "?"
+                    msg = f"You answered incorrectly. The correct answer is option {letter}: {correct_text}."
+                if q.get("explanation"):
+                    msg += f" Why: {q['explanation']}"
+                self.speak(msg)
+        elif screen == "count_select":
+            self.speak(self._count_select_prompt or self.mode_note)
+        elif screen == "summary" and self.questions:
+            total = len(self.questions)
+            correct = sum(1 for i, q in enumerate(self.questions)
+                          if self.user_answers[i] == q.get("correctIndex"))
+            self.speak(f"Quiz complete. You scored {correct} out of {total}.")
+        else:
+            self.speak("Welcome to LPTest. Tap Upload File to begin.")
 
     # -- file loading -----------------------------------------------------
     def browse_file(self):
@@ -710,7 +924,10 @@ class LPTestApp(App):
         self.count_select.show_choices(choices, total, self.mode_note)
         self.sm.current = "count_select"
         labels = ", ".join(label for label, _ in choices)
-        self.speak(f"{self.mode_note} How many questions would you like? Choose from: {labels}.")
+        self._count_select_prompt = (
+            f"{self.mode_note} How many questions would you like? Choose from: {labels}."
+        )
+        self.speak(self._count_select_prompt)
 
     def start_quiz_with_count(self, count: int):
         import random
