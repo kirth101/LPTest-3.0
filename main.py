@@ -39,6 +39,7 @@ import os
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.window import Window
+from kivy.graphics import Color, Ellipse, Line
 from kivy.lang import Builder
 from kivy.metrics import dp, sp
 from kivy.properties import ListProperty, StringProperty, BooleanProperty
@@ -50,6 +51,7 @@ from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.screenmanager import Screen, ScreenManager, NoTransition
 from kivy.uix.scrollview import ScrollView
+from kivy.uix.widget import Widget
 from kivy.utils import platform
 
 from file_parser import extract_text
@@ -115,17 +117,6 @@ KV = """
             pos: self.pos
             size: self.size
             radius: [dp(8)]
-
-<IconButton>:
-    text_size: self.size
-    halign: 'center'
-    valign: 'middle'
-    canvas.before:
-        Color:
-            rgba: self.bg_color
-        Ellipse:
-            pos: self.pos
-            size: self.size
 """
 Builder.load_string(KV)
 
@@ -134,19 +125,85 @@ class PanelButton(Button):
     bg_color = ListProperty(PANEL_BG)
 
 
-class IconButton(ButtonBehavior, Label):
-    """Small round icon button -- used for the Home / Speak controls that
-    float in the top-right corner of each in-quiz screen so a screen-
-    reader user (or anyone) can always get back home or hear the current
-    screen again, from a predictable, fixed spot."""
+class _RoundIconButton(ButtonBehavior, Widget):
+    """Base for the small round Home / Speak buttons. Draws its icon as
+    plain vector lines instead of an emoji/symbol character -- emoji
+    glyphs depend on the device having a font that includes them, and
+    Kivy's bundled default font doesn't, so text like "\U0001F3E0" was
+    rendering as an empty tofu box on-device instead of an actual icon.
+    Vector lines always render correctly, on every device, regardless of
+    font support."""
     bg_color = ListProperty(ORANGE)
 
     def __init__(self, **kwargs):
         kwargs.setdefault("size_hint", (None, None))
         kwargs.setdefault("size", (dp(44), dp(44)))
-        kwargs.setdefault("color", (1, 1, 1, 1))
-        kwargs.setdefault("font_size", sp(20))
         super().__init__(**kwargs)
+        with self.canvas.before:
+            self._bg_color_instr = Color(rgba=self.bg_color)
+            self._bg_ellipse = Ellipse(pos=self.pos, size=self.size)
+        with self.canvas.after:
+            Color(1, 1, 1, 1)
+            self._lines = self._build_lines()
+        self.bind(pos=self._redraw, size=self._redraw, bg_color=self._recolor)
+        self._redraw()
+
+    def _build_lines(self):
+        """Subclasses return a list of Line() instances (empty points to
+        start; _redraw() fills them in based on current size)."""
+        raise NotImplementedError
+
+    def _recolor(self, *_a):
+        self._bg_color_instr.rgba = self.bg_color
+
+    def _redraw(self, *_a):
+        self._bg_ellipse.pos = self.pos
+        self._bg_ellipse.size = self.size
+
+
+class HomeIconButton(_RoundIconButton):
+    def _build_lines(self):
+        self._roof = Line(width=dp(1.6), cap="round", joint="round")
+        self._base = Line(width=dp(1.6), cap="round", joint="round")
+        self._door = Line(width=dp(1.4), cap="round", joint="round")
+        return [self._roof, self._base, self._door]
+
+    def _redraw(self, *_a):
+        super()._redraw()
+        cx, cy = self.center_x, self.center_y
+        s = min(self.width, self.height) * 0.30
+        self._roof.points = [cx - s, cy - s * 0.05, cx, cy + s * 0.95, cx + s, cy - s * 0.05]
+        self._base.points = [
+            cx - s * 0.65, cy - s * 0.05, cx - s * 0.65, cy - s * 0.95,
+            cx + s * 0.65, cy - s * 0.95, cx + s * 0.65, cy - s * 0.05,
+        ]
+        self._door.points = [
+            cx - s * 0.18, cy - s * 0.95, cx - s * 0.18, cy - s * 0.30,
+            cx + s * 0.18, cy - s * 0.30, cx + s * 0.18, cy - s * 0.95,
+        ]
+
+
+class SpeakIconButton(_RoundIconButton):
+    def _build_lines(self):
+        self._body = Line(width=dp(1.6), cap="round", joint="round", close=True)
+        self._wave1 = Line(width=dp(1.4), cap="round")
+        self._wave2 = Line(width=dp(1.4), cap="round")
+        return [self._body, self._wave1, self._wave2]
+
+    def _redraw(self, *_a):
+        super()._redraw()
+        cx, cy = self.center_x, self.center_y
+        s = min(self.width, self.height) * 0.30
+        self._body.points = [
+            cx - s, cy - s * 0.35,
+            cx - s * 0.4, cy - s * 0.35,
+            cx, cy - s * 0.9,
+            cx, cy + s * 0.9,
+            cx - s * 0.4, cy + s * 0.35,
+            cx - s, cy + s * 0.35,
+        ]
+        self._wave1.circle = (cx + s * 0.15, cy, s * 0.55, -45, 45)
+        self._wave2.circle = (cx + s * 0.15, cy, s * 0.95, -45, 45)
 
 
 class OptionButton(ButtonBehavior, Label):
@@ -187,37 +244,144 @@ def option_font_size(options: list[str]) -> int:
 
 
 def build_icon_bar(show_home: bool = True) -> BoxLayout:
-    """Floating Home + Speak round icon buttons, anchored top-right. Added
-    as an extra widget on top of a Screen's normal content (Screen behaves
-    like a RelativeLayout, so this just overlaps in its own corner without
-    disturbing the rest of the layout) -- always in the same predictable
-    spot on every screen so it's easy to find without looking."""
-    width = dp(100) if show_home else dp(56)
+    """Home + Speak round icon buttons, sized to sit inline in a header
+    row (next to a title/progress label) rather than floating on top of
+    other content -- floating over the mode-note text was the visual bug
+    reported earlier."""
+    width = dp(44) * (2 if show_home else 1) + (dp(8) if show_home else 0)
     bar = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint=(None, None),
-                     size=(width, dp(44)), pos_hint={"right": 0.97, "top": 0.97})
+                     size=(width, dp(44)))
     if show_home:
-        home_btn = IconButton(text="\U0001F3E0")
+        home_btn = HomeIconButton()
         home_btn.bind(on_release=lambda *_: App.get_running_app().confirm_go_home())
         bar.add_widget(home_btn)
-    speak_btn = IconButton(text="\U0001F50A")
+    speak_btn = SpeakIconButton()
     speak_btn.bind(on_release=lambda *_: App.get_running_app().repeat_current())
     bar.add_widget(speak_btn)
     return bar
 
 
+class VoiceNavMixin:
+    """Adds swipe-to-move-focus / double-tap-to-activate gesture
+    navigation to a Screen, active only while Voice Guidance is on.
+
+    Every screen that uses this mixin populates `self._voice_nav_items`
+    (a list of (spoken_label, activate_callable) tuples covering
+    everything meaningfully tappable on that screen -- including its own
+    Home/Speak icons) as soon as its content is built or changes. That's
+    what makes a blind user able to reach "Upload File" on the very
+    first screen, not just navigate once already inside a quiz.
+
+    Gesture feel matters as much as the gesture existing at all, so this
+    also fires a short, distinct haptic pulse on every focus change and
+    on activation -- the same kind of tactile confirmation TalkBack
+    gives -- and keeps thresholds tight (short swipe distance, short
+    double-tap window) so it responds immediately rather than feeling
+    laggy or like it's "just looping" between items with no feedback."""
+
+    _SWIPE_THRESHOLD = dp(28)
+    _DOUBLE_TAP_WINDOW = 0.3
+    _DOUBLE_TAP_RADIUS = dp(60)
+
+    def _voice_nav_init(self):
+        self._voice_nav_items: list[tuple[str, object]] = []
+        self._voice_nav_index = 0
+        self._swipe_start = None
+        self._last_tap_time = 0.0
+        self._last_tap_pos = (0.0, 0.0)
+
+    def _set_voice_nav_items(self, items: list[tuple[str, object]], reset_index: bool = True):
+        self._voice_nav_items = items
+        if reset_index or self._voice_nav_index >= len(items):
+            self._voice_nav_index = 0
+
+    def _voice_nav_speak_current(self):
+        app = App.get_running_app()
+        if not app.voice_enabled or not self._voice_nav_items:
+            return
+        label, _callback = self._voice_nav_items[self._voice_nav_index]
+        app.speak(label)
+
+    def _haptic(self, short: bool = True):
+        """A quick vibration pulse -- 15ms for a focus move, 35ms for an
+        activation, mirroring the tactile "tick" TalkBack gives so
+        swiping feels immediate and alive rather than silent/laggy."""
+        try:
+            from plyer import vibrator
+            vibrator.vibrate(0.015 if short else 0.035)
+        except Exception:
+            pass  # no vibration motor / not supported on this platform -- fine
+
+    def _voice_nav_move(self, delta: int):
+        if not self._voice_nav_items:
+            return
+        self._haptic(short=True)
+        self._voice_nav_index = (self._voice_nav_index + delta) % len(self._voice_nav_items)
+        self._voice_nav_speak_current()
+
+    def _voice_nav_activate(self):
+        if not self._voice_nav_items:
+            return
+        self._haptic(short=False)
+        _label, callback = self._voice_nav_items[self._voice_nav_index]
+        if callback:
+            callback()
+
+    def on_touch_down(self, touch):
+        app = App.get_running_app()
+        if app.voice_enabled and self.collide_point(*touch.pos):
+            self._swipe_start = touch.pos
+        return super().on_touch_down(touch)
+
+    def on_touch_up(self, touch):
+        app = App.get_running_app()
+        if app.voice_enabled and self._swipe_start is not None and self.collide_point(*touch.pos):
+            dx = touch.pos[0] - self._swipe_start[0]
+            dy = touch.pos[1] - self._swipe_start[1]
+            import time as _time
+            now = _time.time()
+            if abs(dx) > self._SWIPE_THRESHOLD and abs(dx) > abs(dy):
+                # Horizontal swipe -> move focus. Right = next, left =
+                # previous (the usual screen-reader convention). Vertical
+                # drags fall through untouched below, so normal
+                # scrolling still works everywhere it's needed.
+                self._voice_nav_move(1 if dx > 0 else -1)
+                self._swipe_start = None
+                return True
+            else:
+                same_spot = (abs(touch.pos[0] - self._last_tap_pos[0]) < self._DOUBLE_TAP_RADIUS and
+                             abs(touch.pos[1] - self._last_tap_pos[1]) < self._DOUBLE_TAP_RADIUS)
+                if now - self._last_tap_time < self._DOUBLE_TAP_WINDOW and same_spot:
+                    self._voice_nav_activate()
+                    self._last_tap_time = 0.0
+                    self._swipe_start = None
+                    return True
+                self._last_tap_time = now
+                self._last_tap_pos = touch.pos
+        self._swipe_start = None
+        return super().on_touch_up(touch)
+
+
 # ---------------------------------------------------------------------------
 # Landing screen
 # ---------------------------------------------------------------------------
-class LandingScreen(Screen):
+class LandingScreen(VoiceNavMixin, Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._voice_nav_init()
         root = BoxLayout(orientation="vertical", padding=dp(24), spacing=dp(12))
         self.add_widget(root)
 
-        root.add_widget(Label(
+        header = BoxLayout(size_hint_y=None, height=dp(44))
+        header.add_widget(Label(
             text="Welcome to LPTest", font_size=sp(26), bold=True,
-            color=ORANGE_LIGHT, size_hint_y=None, height=dp(48)
+            color=ORANGE_LIGHT, halign="left", valign="middle"
         ))
+        header.children[-1].bind(size=lambda w, *_: setattr(w, "text_size", w.size))
+        self._speak_icon = build_icon_bar(show_home=False)
+        header.add_widget(self._speak_icon)
+        root.add_widget(header)
+
         root.add_widget(Label(
             text="Upload a study file (PDF, Word, or text) to generate a quiz from it.",
             font_size=sp(14), color=MUTED, size_hint_y=None, height=dp(48)
@@ -228,7 +392,7 @@ class LandingScreen(Screen):
         self.upload_btn.bind(on_release=lambda *_: App.get_running_app().browse_file())
         root.add_widget(self.upload_btn)
 
-        self.voice_btn = PanelButton(text="\U0001F50A Voice Guidance: On", bg_color=PANEL_BG,
+        self.voice_btn = PanelButton(text="Voice Guidance: On", bg_color=PANEL_BG,
                                       height=dp(48), font_size=sp(13))
         self.voice_btn.bind(on_release=lambda *_: App.get_running_app().toggle_voice())
         root.add_widget(self.voice_btn)
@@ -246,6 +410,16 @@ class LandingScreen(Screen):
         scroller = ScrollView(size_hint=(1, 1))
         scroller.add_widget(self.history_list)
         root.add_widget(scroller)
+
+        # Swipe-reachable from the moment the app opens -- this is the
+        # screen a blind user lands on first, so "Upload File" has to be
+        # reachable by gesture here, not just once already inside a quiz.
+        app = App.get_running_app
+        self._set_voice_nav_items([
+            ("Upload File button", lambda: app().browse_file()),
+            ("Voice Guidance toggle button", lambda: app().toggle_voice()),
+            ("Speak button, repeats the welcome message", lambda: app().repeat_current()),
+        ])
 
     def on_pre_enter(self, *_a):
         self.refresh_history()
@@ -286,13 +460,21 @@ class LandingScreen(Screen):
 # ---------------------------------------------------------------------------
 # Question-count selection
 # ---------------------------------------------------------------------------
-class CountSelectScreen(Screen):
+class CountSelectScreen(VoiceNavMixin, Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._voice_nav_init()
         root = BoxLayout(orientation="vertical", padding=dp(24), spacing=dp(14))
         self.add_widget(root)
-        root.add_widget(Label(text="How many questions?", font_size=sp(24), bold=True,
-                               color=ORANGE_LIGHT, size_hint_y=None, height=dp(44)))
+
+        header = BoxLayout(size_hint_y=None, height=dp(44))
+        title = Label(text="How many questions?", font_size=sp(24), bold=True,
+                      color=ORANGE_LIGHT, halign="left", valign="middle")
+        title.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
+        header.add_widget(title)
+        header.add_widget(build_icon_bar())
+        root.add_widget(header)
+
         self.desc = Label(text="", font_size=sp(13), color=MUTED, size_hint_y=None,
                            height=dp(60))
         root.add_widget(self.desc)
@@ -300,45 +482,60 @@ class CountSelectScreen(Screen):
         self.btns_box.bind(minimum_height=self.btns_box.setter("height"))
         root.add_widget(self.btns_box)
         root.add_widget(BoxLayout())  # spacer
-        self.add_widget(build_icon_bar())
 
     def show_choices(self, choices: list[tuple[str, int]], total: int, mode_note: str):
         self.desc.text = mode_note or f"{total} questions available."
         self.btns_box.clear_widgets()
         app = App.get_running_app()
+        nav_items = []
         for label, n in choices:
             btn = PanelButton(text=label, bg_color=ORANGE_DARK, height=dp(52), font_size=sp(15))
             btn.bind(on_release=lambda *_a, count=n: app.start_quiz_with_count(count))
             self.btns_box.add_widget(btn)
+            nav_items.append((f"{label} button", (lambda count=n: app.start_quiz_with_count(count))))
+        nav_items.append(("Home button", lambda: app.confirm_go_home()))
+        nav_items.append(("Speak button, repeats the question count options", lambda: app.repeat_current()))
+        self._set_voice_nav_items(nav_items)
 
 
 # ---------------------------------------------------------------------------
 # Quiz screen
 # ---------------------------------------------------------------------------
-class QuizScreen(Screen):
+class QuizScreen(VoiceNavMixin, Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        root = BoxLayout(orientation="vertical", padding=dp(18), spacing=dp(10))
+        self._voice_nav_init()
+        root = BoxLayout(orientation="vertical", padding=dp(18), spacing=dp(8))
         self.add_widget(root)
 
-        top_bar = BoxLayout(size_hint_y=None, height=dp(28))
-        self.progress_label = Label(text="", font_size=sp(13), color=MUTED, halign="left",
-                                     valign="middle")
+        header = BoxLayout(size_hint_y=None, height=dp(32))
+        self.progress_label = Label(text="", font_size=sp(15), bold=True, color=ORANGE_LIGHT,
+                                     halign="left", valign="middle")
         self.progress_label.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
-        self.mode_label = Label(text="", font_size=sp(11), color=MUTED, halign="right",
-                                 valign="middle", italic=True)
-        self.mode_label.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
-        top_bar.add_widget(self.progress_label)
-        top_bar.add_widget(self.mode_label)
-        root.add_widget(top_bar)
+        header.add_widget(self.progress_label)
+        header.add_widget(build_icon_bar())
+        root.add_widget(header)
 
+        self.mode_label = Label(text="", font_size=sp(11), color=MUTED, halign="left",
+                                 valign="middle", italic=True, size_hint_y=None, height=dp(18))
+        self.mode_label.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
+        root.add_widget(self.mode_label)
+
+        # Bordered question card -- a plain outlined box around the
+        # question text, matching the reference design, so it reads as
+        # its own distinct panel rather than floating loosely at the top.
+        question_card = BoxLayout(padding=dp(14), size_hint=(1, 0.40))
+        with question_card.canvas.before:
+            Color(0.5, 0.5, 0.5, 1)
+            self._question_border = Line(width=dp(1.2))
+        question_card.bind(pos=self._redraw_question_border, size=self._redraw_question_border)
         self.question_label = Label(text="", font_size=sp(20), bold=True, color=FG,
-                                     halign="left", valign="top", size_hint_y=None)
-        self.question_label.bind(width=lambda w, *_: setattr(w, "text_size", (w.width, None)))
-        self.question_label.bind(texture_size=lambda w, *_: setattr(w, "height", w.texture_size[1]))
-        q_scroller = ScrollView(size_hint=(1, 0.42))
+                                     halign="left", valign="top")
+        self.question_label.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
+        q_scroller = ScrollView(size_hint=(1, 1))
         q_scroller.add_widget(self.question_label)
-        root.add_widget(q_scroller)
+        question_card.add_widget(q_scroller)
+        root.add_widget(question_card)
 
         self.options_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(10))
         self.options_box.bind(minimum_height=self.options_box.setter("height"))
@@ -364,83 +561,10 @@ class QuizScreen(Screen):
         self.next_btn.bind(on_release=lambda *_: App.get_running_app().next_question())
         root.add_widget(self.next_btn)
 
-        self.add_widget(build_icon_bar())
-
         self.option_widgets: list[OptionButton] = []
 
-        # -- swipe-to-navigate / double-tap-to-activate ----------------
-        # Active only while Voice Guidance is on (see on_touch_down/up
-        # below). This layers a simple, TalkBack-style touch exploration
-        # on top of the app -- swipe to move a "focus" between the
-        # options (or the Next button once answered), hear each one
-        # named as focus lands on it, and double-tap anywhere to activate
-        # whichever one is currently focused. Direct taps on a button
-        # still work exactly as before regardless of this -- this is
-        # purely additive, for when the user can't see well enough to
-        # aim a tap at a specific button.
-        self._voice_nav_items: list[tuple[str, object]] = []
-        self._voice_nav_index = 0
-        self._swipe_start = None
-        self._last_tap_time = 0.0
-        self._last_tap_pos = (0.0, 0.0)
-
-    def _set_voice_nav_items(self, items: list[tuple[str, object]]):
-        self._voice_nav_items = items
-        self._voice_nav_index = 0
-
-    def _voice_nav_speak_current(self):
-        app = App.get_running_app()
-        if not app.voice_enabled or not self._voice_nav_items:
-            return
-        label, _callback = self._voice_nav_items[self._voice_nav_index]
-        app.speak(label)
-
-    def _voice_nav_move(self, delta: int):
-        if not self._voice_nav_items:
-            return
-        self._voice_nav_index = (self._voice_nav_index + delta) % len(self._voice_nav_items)
-        self._voice_nav_speak_current()
-
-    def _voice_nav_activate(self):
-        if not self._voice_nav_items:
-            return
-        _label, callback = self._voice_nav_items[self._voice_nav_index]
-        if callback:
-            callback()
-
-    def on_touch_down(self, touch):
-        app = App.get_running_app()
-        if app.voice_enabled and self.collide_point(*touch.pos):
-            self._swipe_start = touch.pos
-        return super().on_touch_down(touch)
-
-    def on_touch_up(self, touch):
-        app = App.get_running_app()
-        if app.voice_enabled and self._swipe_start is not None and self.collide_point(*touch.pos):
-            dx = touch.pos[0] - self._swipe_start[0]
-            dy = touch.pos[1] - self._swipe_start[1]
-            import time as _time
-            now = _time.time()
-            if abs(dx) > dp(40) and abs(dx) > abs(dy):
-                # Horizontal swipe -> move focus. Right = next, left =
-                # previous, matching the usual screen-reader convention.
-                # (Vertical drags fall through untouched below, so normal
-                # scrolling in the question/options areas still works.)
-                self._voice_nav_move(1 if dx > 0 else -1)
-                self._swipe_start = None
-                return True
-            else:
-                same_spot = (abs(touch.pos[0] - self._last_tap_pos[0]) < dp(60) and
-                             abs(touch.pos[1] - self._last_tap_pos[1]) < dp(60))
-                if now - self._last_tap_time < 0.4 and same_spot:
-                    self._voice_nav_activate()
-                    self._last_tap_time = 0.0
-                    self._swipe_start = None
-                    return True
-                self._last_tap_time = now
-                self._last_tap_pos = touch.pos
-        self._swipe_start = None
-        return super().on_touch_up(touch)
+    def _redraw_question_border(self, widget, *_a):
+        self._question_border.rectangle = (widget.x, widget.y, widget.width, widget.height)
 
     def render(self, q: dict, index: int, total: int, mode_note: str, locked: bool,
                chosen: int | None):
@@ -460,10 +584,10 @@ class QuizScreen(Screen):
             btn = OptionButton(text=label, font_size=sp(size))
             if locked:
                 if i == correct_idx:
-                    btn.text = f"{label}  \u2713 Correct"
+                    btn.text = f"{label}  (Correct)"
                     btn.bg_color = GREEN
                 elif i == chosen:
-                    btn.text = f"{label}  \u2717 Your answer"
+                    btn.text = f"{label}  (Your answer)"
                     btn.bg_color = RED
                 else:
                     btn.bg_color = ORANGE_DARK
@@ -503,28 +627,37 @@ class QuizScreen(Screen):
 
         app = App.get_running_app()
         if not locked:
-            self._set_voice_nav_items([
+            nav_items = [
                 (f"Option {spoken_letters[i]}: {q['options'][i] if i < len(q['options']) else ''}",
                  (lambda idx=i: app.select_option(idx)))
                 for i in range(4)
-            ])
+            ]
         else:
             next_label = "Finish Quiz button" if index == total - 1 else "Next Question button"
-            self._set_voice_nav_items([(next_label, lambda: app.next_question())])
+            nav_items = [(next_label, lambda: app.next_question())]
+        nav_items.append(("Home button", lambda: app.confirm_go_home()))
+        nav_items.append(("Speak button, repeats the current question", lambda: app.repeat_current()))
+        self._set_voice_nav_items(nav_items)
 
 
 # ---------------------------------------------------------------------------
 # Summary screen
 # ---------------------------------------------------------------------------
-class SummaryScreen(Screen):
+class SummaryScreen(VoiceNavMixin, Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._voice_nav_init()
         root = BoxLayout(orientation="vertical", padding=dp(18), spacing=dp(10))
         self.add_widget(root)
 
+        header = BoxLayout(size_hint_y=None, height=dp(40))
         self.heading = Label(text="Quiz Complete!", font_size=sp(24), bold=True,
-                              color=ORANGE_LIGHT, size_hint_y=None, height=dp(40))
-        root.add_widget(self.heading)
+                              color=ORANGE_LIGHT, halign="left", valign="middle")
+        self.heading.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
+        header.add_widget(self.heading)
+        header.add_widget(build_icon_bar())
+        root.add_widget(header)
+
         self.score_label = Label(text="", font_size=sp(16), color=FG, size_hint_y=None,
                                   height=dp(32))
         root.add_widget(self.score_label)
@@ -536,13 +669,10 @@ class SummaryScreen(Screen):
         root.add_widget(scroller)
 
         actions = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8))
-        home_btn = PanelButton(text="Home", bg_color=PANEL_BG, font_size=sp(13))
-        home_btn.bind(on_release=lambda *_: App.get_running_app().reset_to_landing())
         retry_btn = PanelButton(text="Retry Incorrect", bg_color=ORANGE, font_size=sp(13))
         retry_btn.bind(on_release=lambda *_: App.get_running_app().retry_incorrect())
         new_btn = PanelButton(text="Upload New File", bg_color=PANEL_BG, font_size=sp(13))
         new_btn.bind(on_release=lambda *_: App.get_running_app().reset_to_landing())
-        actions.add_widget(home_btn)
         actions.add_widget(retry_btn)
         actions.add_widget(new_btn)
         root.add_widget(actions)
@@ -582,6 +712,14 @@ class SummaryScreen(Screen):
 
             row.height = sum(c.height for c in row.children) + dp(16)
             self.list_box.add_widget(row)
+
+        app = App.get_running_app()
+        self._set_voice_nav_items([
+            ("Retry Incorrect button", lambda: app.retry_incorrect()),
+            ("Upload New File button", lambda: app.reset_to_landing()),
+            ("Home button", lambda: app.confirm_go_home()),
+            ("Speak button, repeats your final score", lambda: app.repeat_current()),
+        ])
 
 
 # ---------------------------------------------------------------------------
@@ -644,8 +782,8 @@ class LPTestApp(App):
     def toggle_voice(self):
         self.voice_enabled = not self.voice_enabled
         self.landing.voice_btn.text = (
-            "\U0001F50A Voice Guidance: On" if self.voice_enabled
-            else "\U0001F507 Voice Guidance: Off"
+            "Voice Guidance: On" if self.voice_enabled
+            else "Voice Guidance: Off"
         )
         if self.voice_enabled:
             self.speak("Voice guidance on.")
