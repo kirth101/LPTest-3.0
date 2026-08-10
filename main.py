@@ -520,39 +520,98 @@ class LPTestApp(App):
         self.speak("Opening file picker.")
         if platform == "android":
             try:
-                from plyer import filechooser
-                filechooser.open_file(on_selection=self._on_android_file_selected)
+                self._android_pick_file()
                 return
             except Exception as e:
-                print(f"LPTest: plyer file picker failed to open: {e}")
+                print(f"LPTest: Android file picker failed to open: {e}")
                 self.speak("Couldn't open the file picker. Trying the backup file browser.")
                 # fall through to the desktop-style picker as a backup
         self._browse_file_desktop()
 
-    def _on_android_file_selected(self, selection):
-        # plyer's Android file-picker callback can arrive off the main
-        # thread -- hop back onto it before touching any Kivy widget.
-        Clock.schedule_once(lambda *_: self._handle_file_selection(selection), 0)
+    def _android_pick_file(self):
+        """Open Android's real system document picker directly via
+        pyjnius, instead of going through plyer.filechooser.
 
-    def _handle_file_selection(self, selection):
-        if not selection:
-            self.speak("No file selected.")
+        plyer's Android file chooser resolves the picked file by reading
+        the legacy `_data` column off the content:// URI -- but that
+        column is routinely null on modern Android's scoped storage, and
+        not just for cloud-backed files: plain local files (including
+        .txt files picked from the ordinary Files/Downloads app) hit this
+        too, which was the actual bug. The fix is to stop trying to
+        resolve a filesystem path at all: read the picked file's bytes
+        straight from its ContentResolver stream and copy them into our
+        own app-private storage, which we know is always readable
+        regardless of what the source provider does or doesn't expose."""
+        from jnius import autoclass
+        from android import activity, mActivity
+
+        Intent = autoclass("android.content.Intent")
+
+        if not hasattr(self, "_android_select_code"):
+            import random
+            self._android_select_code = random.randint(100000, 999999)
+            activity.bind(on_activity_result=self._android_on_activity_result)
+
+        intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        intent.addCategory(Intent.CATEGORY_OPENABLE)
+        intent.setType("*/*")
+        mActivity.startActivityForResult(intent, self._android_select_code)
+
+    def _android_on_activity_result(self, request_code, result_code, data):
+        if request_code != getattr(self, "_android_select_code", None):
             return
-        path = selection[0]
-        # Some content providers (Google Drive, other cloud-backed apps)
-        # don't expose a real filesystem path, so plyer can hand back
-        # None here instead of a usable path. Guessing wrong and passing
-        # that straight to file_parser.py used to crash the whole app --
-        # os.path.exists(None) raises a TypeError, uncaught, with no
-        # console visible on a phone to explain why. Fail soft instead.
-        if not path or not isinstance(path, str) or not os.path.exists(path):
-            self._fail_load(
-                "Couldn't access that file directly (this can happen with files from "
-                "cloud storage apps). Please try a file saved on your device, e.g. in "
-                "Downloads."
-            )
+        from jnius import autoclass
+        Activity = autoclass("android.app.Activity")
+        if result_code != Activity.RESULT_OK or data is None:
+            Clock.schedule_once(lambda *_: self.speak("No file selected."), 0)
             return
-        self.load_file(path)
+        uri = data.getData()
+        # onActivityResult runs off Kivy's own event loop -- hop back
+        # onto it via Clock before touching any widget or app state.
+        Clock.schedule_once(lambda *_: self._android_copy_uri_to_temp(uri), 0)
+
+    def _android_copy_uri_to_temp(self, uri):
+        try:
+            from jnius import autoclass
+            from android import mActivity
+
+            resolver = mActivity.getContentResolver()
+
+            # OpenableColumns.DISPLAY_NAME works across virtually every
+            # content provider (unlike the `_data` column) -- it's the
+            # column SAF itself guarantees providers fill in.
+            display_name = "uploaded_file"
+            try:
+                OpenableColumns = autoclass("android.provider.OpenableColumns")
+                cursor = resolver.query(uri, None, None, None, None)
+                if cursor is not None:
+                    idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if idx != -1 and cursor.moveToFirst():
+                        display_name = cursor.getString(idx) or display_name
+                    cursor.close()
+            except Exception:
+                pass
+            display_name = os.path.basename(display_name) or "uploaded_file"
+
+            input_stream = resolver.openInputStream(uri)
+            dest_dir = os.path.join(self.user_data_dir, "picked_files")
+            os.makedirs(dest_dir, exist_ok=True)
+            dest_path = os.path.join(dest_dir, display_name)
+
+            buf = bytearray(65536)
+            with open(dest_path, "wb") as out:
+                while True:
+                    n = input_stream.read(buf)
+                    if n == -1:
+                        break
+                    out.write(bytes(buf[:n]))
+            input_stream.close()
+        except Exception as e:
+            print(f"LPTest: failed to copy picked file: {e}")
+            self._fail_load("Couldn't read that file. Please try a different file.")
+            return
+
+        self.load_file(dest_path)
 
     def _browse_file_desktop(self):
         """Kivy's own in-window file browser. Used on desktop, where a
