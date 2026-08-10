@@ -243,95 +243,168 @@ def option_font_size(options: list[str]) -> int:
     return 14
 
 
-def build_icon_bar(show_home: bool = True) -> BoxLayout:
+def guarded_release(action):
+    """Wrap a click handler (taking the running App as its one argument)
+    so it's a no-op while Voice Guidance is on -- see App.voice_guard.
+    Used for every ordinary on_release binding in the UI so direct
+    single-taps only work when Voice Guidance is off; while it's on,
+    only the double-tap-to-activate gesture (VoiceNavMixin) activates
+    anything."""
+    def handler(*_a):
+        app = App.get_running_app()
+        app.voice_guard(action)(app)
+    return handler
+
+
+def build_icon_bar(show_home: bool = True):
     """Home + Speak round icon buttons, sized to sit inline in a header
     row (next to a title/progress label) rather than floating on top of
     other content -- floating over the mode-note text was the visual bug
-    reported earlier."""
+    reported earlier. Returns (bar, home_btn_or_None, speak_btn) so the
+    caller can also register the buttons themselves as voice-nav items
+    (with a real widget reference, so explore-by-touch can find them)."""
     width = dp(44) * (2 if show_home else 1) + (dp(8) if show_home else 0)
     bar = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint=(None, None),
                      size=(width, dp(44)))
+    home_btn = None
     if show_home:
         home_btn = HomeIconButton()
-        home_btn.bind(on_release=lambda *_: App.get_running_app().confirm_go_home())
+        home_btn.bind(on_release=guarded_release(lambda app: app.confirm_go_home()))
         bar.add_widget(home_btn)
     speak_btn = SpeakIconButton()
-    speak_btn.bind(on_release=lambda *_: App.get_running_app().repeat_current())
+    speak_btn.bind(on_release=guarded_release(lambda app: app.repeat_current()))
     bar.add_widget(speak_btn)
-    return bar
+    return bar, home_btn, speak_btn
 
 
 class VoiceNavMixin:
-    """Adds swipe-to-move-focus / double-tap-to-activate gesture
-    navigation to a Screen, active only while Voice Guidance is on.
+    """Adds TalkBack-style touch navigation to a Screen (or any widget),
+    active only while Voice Guidance is on:
+
+    - Explore by touch: dragging a finger across the screen moves focus
+      onto whatever item it passes over and announces it immediately,
+      like sliding a finger around to feel what's there.
+    - Swipe left/right: moves focus to the previous/next item without
+      needing to land exactly on it -- handy when exploring isn't
+      practical.
+    - Double-tap anywhere: activates whichever item currently has focus.
+    - A short, distinct haptic pulse fires on every focus change and on
+      activation, the same tactile confirmation TalkBack gives, so it
+      reads as responsive rather than laggy.
 
     Every screen that uses this mixin populates `self._voice_nav_items`
-    (a list of (spoken_label, activate_callable) tuples covering
+    with (spoken_label, activate_callable, widget_or_None) covering
     everything meaningfully tappable on that screen -- including its own
-    Home/Speak icons) as soon as its content is built or changes. That's
-    what makes a blind user able to reach "Upload File" on the very
-    first screen, not just navigate once already inside a quiz.
+    Home/Speak icons -- as soon as its content is built or changes. The
+    widget reference is what makes touch-exploration possible: without
+    it we can only do discrete swipes, not "what's under my finger".
 
-    Gesture feel matters as much as the gesture existing at all, so this
-    also fires a short, distinct haptic pulse on every focus change and
-    on activation -- the same kind of tactile confirmation TalkBack
-    gives -- and keeps thresholds tight (short swipe distance, short
-    double-tap window) so it responds immediately rather than feeling
-    laggy or like it's "just looping" between items with no feedback."""
+    While Voice Guidance is on, ordinary single taps on buttons are
+    intentionally NOT wired to activate anything directly (see
+    App.voice_guard) -- only double-tap-to-activate does. That matches
+    how a real screen reader behaves and protects a blind user from
+    accidentally triggering the wrong thing while exploring; a sighted
+    user who doesn't want this can just turn Voice Guidance off."""
 
     _SWIPE_THRESHOLD = dp(28)
     _DOUBLE_TAP_WINDOW = 0.3
     _DOUBLE_TAP_RADIUS = dp(60)
 
     def _voice_nav_init(self):
-        self._voice_nav_items: list[tuple[str, object]] = []
+        self._voice_nav_items: list[tuple[str, object, object]] = []
         self._voice_nav_index = 0
         self._swipe_start = None
         self._last_tap_time = 0.0
         self._last_tap_pos = (0.0, 0.0)
 
-    def _set_voice_nav_items(self, items: list[tuple[str, object]], reset_index: bool = True):
-        self._voice_nav_items = items
-        if reset_index or self._voice_nav_index >= len(items):
+    def _set_voice_nav_items(self, items: list[tuple], reset_index: bool = True):
+        normalized = []
+        for it in items:
+            if len(it) == 2:
+                normalized.append((it[0], it[1], None))
+            else:
+                normalized.append(it)
+        self._voice_nav_items = normalized
+        if reset_index or self._voice_nav_index >= len(normalized):
             self._voice_nav_index = 0
-
-    def _voice_nav_speak_current(self):
-        app = App.get_running_app()
-        if not app.voice_enabled or not self._voice_nav_items:
-            return
-        label, _callback = self._voice_nav_items[self._voice_nav_index]
-        app.speak(label)
 
     def _haptic(self, short: bool = True):
         """A quick vibration pulse -- 15ms for a focus move, 35ms for an
-        activation, mirroring the tactile "tick" TalkBack gives so
-        swiping feels immediate and alive rather than silent/laggy."""
+        activation -- so exploring/swiping feels immediate and alive
+        instead of silent or laggy."""
         try:
             from plyer import vibrator
             vibrator.vibrate(0.015 if short else 0.035)
         except Exception:
             pass  # no vibration motor / not supported on this platform -- fine
 
+    def _voice_nav_focus(self, index: int, *, haptic: bool = True):
+        if not self._voice_nav_items or index == self._voice_nav_index:
+            return
+        self._voice_nav_index = index
+        if haptic:
+            self._haptic(short=True)
+        label, _callback, _widget = self._voice_nav_items[index]
+        App.get_running_app().speak(label)
+
+    def _voice_nav_speak_current(self):
+        app = App.get_running_app()
+        if not app.voice_enabled or not self._voice_nav_items:
+            return
+        label, _callback, _widget = self._voice_nav_items[self._voice_nav_index]
+        app.speak(label)
+
     def _voice_nav_move(self, delta: int):
         if not self._voice_nav_items:
             return
-        self._haptic(short=True)
-        self._voice_nav_index = (self._voice_nav_index + delta) % len(self._voice_nav_items)
-        self._voice_nav_speak_current()
+        new_index = (self._voice_nav_index + delta) % len(self._voice_nav_items)
+        self._voice_nav_focus(new_index)
 
     def _voice_nav_activate(self):
         if not self._voice_nav_items:
             return
         self._haptic(short=False)
-        _label, callback = self._voice_nav_items[self._voice_nav_index]
+        _label, callback, _widget = self._voice_nav_items[self._voice_nav_index]
         if callback:
             callback()
+
+    def _voice_nav_hit_test(self, window_pos) -> int | None:
+        """Which nav item (if any) is under `window_pos`, correctly
+        accounting for scrolling/nesting -- to_widget() walks up the
+        widget tree applying every ancestor's transform (including a
+        ScrollView's current scroll offset), so this still works for
+        options that have scrolled partway off-screen."""
+        for idx, (_label, _callback, widget) in enumerate(self._voice_nav_items):
+            if widget is None or widget.parent is None:
+                continue
+            try:
+                local = widget.to_widget(*window_pos)
+                if widget.collide_point(*local):
+                    return idx
+            except Exception:
+                continue
+        return None
 
     def on_touch_down(self, touch):
         app = App.get_running_app()
         if app.voice_enabled and self.collide_point(*touch.pos):
             self._swipe_start = touch.pos
+            # Explore-by-touch: landing a finger directly on an item
+            # focuses it immediately, same as real screen readers.
+            hit = self._voice_nav_hit_test(touch.pos)
+            if hit is not None:
+                self._voice_nav_focus(hit)
         return super().on_touch_down(touch)
+
+    def on_touch_move(self, touch):
+        app = App.get_running_app()
+        if app.voice_enabled and self._swipe_start is not None and self.collide_point(*touch.pos):
+            hit = self._voice_nav_hit_test(touch.pos)
+            if hit is not None:
+                self._voice_nav_focus(hit)
+        # Never swallow move events -- a ScrollView underneath still
+        # needs them to keep scrolling working while exploring.
+        return super().on_touch_move(touch)
 
     def on_touch_up(self, touch):
         app = App.get_running_app()
@@ -362,6 +435,16 @@ class VoiceNavMixin:
         return super().on_touch_up(touch)
 
 
+class VoiceNavBoxLayout(VoiceNavMixin, BoxLayout):
+    """A plain BoxLayout with the same touch-exploration/swipe/double-tap
+    behavior as a Screen -- used for Popup content (e.g. the "leave
+    quiz?" confirmation), since a Popup isn't a Screen and wouldn't
+    otherwise get any of this."""
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._voice_nav_init()
+
+
 # ---------------------------------------------------------------------------
 # Landing screen
 # ---------------------------------------------------------------------------
@@ -378,8 +461,8 @@ class LandingScreen(VoiceNavMixin, Screen):
             color=ORANGE_LIGHT, halign="left", valign="middle"
         ))
         header.children[-1].bind(size=lambda w, *_: setattr(w, "text_size", w.size))
-        self._speak_icon = build_icon_bar(show_home=False)
-        header.add_widget(self._speak_icon)
+        _bar, _home, self._speak_btn = build_icon_bar(show_home=False)
+        header.add_widget(_bar)
         root.add_widget(header)
 
         root.add_widget(Label(
@@ -389,12 +472,12 @@ class LandingScreen(VoiceNavMixin, Screen):
 
         self.upload_btn = PanelButton(text="Upload File", bg_color=ORANGE, height=dp(56),
                                        font_size=sp(16))
-        self.upload_btn.bind(on_release=lambda *_: App.get_running_app().browse_file())
+        self.upload_btn.bind(on_release=guarded_release(lambda app: app.browse_file()))
         root.add_widget(self.upload_btn)
 
         self.voice_btn = PanelButton(text="Voice Guidance: On", bg_color=PANEL_BG,
                                       height=dp(48), font_size=sp(13))
-        self.voice_btn.bind(on_release=lambda *_: App.get_running_app().toggle_voice())
+        self.voice_btn.bind(on_release=guarded_release(lambda app: app.toggle_voice()))
         root.add_widget(self.voice_btn)
 
         self.status_label = Label(text="", font_size=sp(13), color=MUTED,
@@ -411,14 +494,14 @@ class LandingScreen(VoiceNavMixin, Screen):
         scroller.add_widget(self.history_list)
         root.add_widget(scroller)
 
-        # Swipe-reachable from the moment the app opens -- this is the
-        # screen a blind user lands on first, so "Upload File" has to be
-        # reachable by gesture here, not just once already inside a quiz.
+        # Swipe/explore-reachable from the moment the app opens -- this is
+        # the screen a blind user lands on first, so "Upload File" has to
+        # be reachable here by touch, not just once already inside a quiz.
         app = App.get_running_app
         self._set_voice_nav_items([
-            ("Upload File button", lambda: app().browse_file()),
-            ("Voice Guidance toggle button", lambda: app().toggle_voice()),
-            ("Speak button, repeats the welcome message", lambda: app().repeat_current()),
+            ("Upload File button", lambda: app().browse_file(), self.upload_btn),
+            ("Voice Guidance toggle button", lambda: app().toggle_voice(), self.voice_btn),
+            ("Speak button, repeats the welcome message", lambda: app().repeat_current(), self._speak_btn),
         ])
 
     def on_pre_enter(self, *_a):
@@ -427,13 +510,21 @@ class LandingScreen(VoiceNavMixin, Screen):
     def refresh_history(self):
         self.history_list.clear_widgets()
         history = list(reversed(quiz_history.load_history()))
+        base_items = [
+            ("Upload File button", lambda: App.get_running_app().browse_file(), self.upload_btn),
+            ("Voice Guidance toggle button", lambda: App.get_running_app().toggle_voice(), self.voice_btn),
+            ("Speak button, repeats the welcome message",
+             lambda: App.get_running_app().repeat_current(), self._speak_btn),
+        ]
         if not history:
             self.history_list.add_widget(Label(
                 text="No previous quizzes yet.", color=MUTED, font_size=sp(13),
                 size_hint_y=None, height=dp(32)
             ))
+            self._set_voice_nav_items(base_items)
             return
         app = App.get_running_app()
+        nav_items = list(base_items)
         for entry in history[:20]:
             row = HistoryRow(orientation="horizontal", padding=dp(10))
             info = BoxLayout(orientation="vertical")
@@ -448,13 +539,17 @@ class LandingScreen(VoiceNavMixin, Screen):
             row.add_widget(info)
             retake_btn = PanelButton(text="Retake", bg_color=ORANGE, size_hint=(None, None),
                                       width=dp(90), height=dp(40), font_size=sp(12))
-            retake_btn.bind(on_release=lambda *_a, e=entry: app.retake_entry(e))
+            retake_btn.bind(on_release=guarded_release(lambda app, e=entry: app.retake_entry(e)))
             review_btn = PanelButton(text="Review", bg_color=PANEL_BG, size_hint=(None, None),
                                       width=dp(90), height=dp(40), font_size=sp(12))
-            review_btn.bind(on_release=lambda *_a, e=entry: app.review_entry(e))
+            review_btn.bind(on_release=guarded_release(lambda app, e=entry: app.review_entry(e)))
             row.add_widget(retake_btn)
             row.add_widget(review_btn)
             self.history_list.add_widget(row)
+            name = entry.get("filename", "Untitled quiz")
+            nav_items.append((f"Retake {name} button", (lambda e=entry: app.retake_entry(e)), retake_btn))
+            nav_items.append((f"Review {name} button", (lambda e=entry: app.review_entry(e)), review_btn))
+        self._set_voice_nav_items(nav_items)
 
 
 # ---------------------------------------------------------------------------
@@ -472,7 +567,8 @@ class CountSelectScreen(VoiceNavMixin, Screen):
                       color=ORANGE_LIGHT, halign="left", valign="middle")
         title.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
         header.add_widget(title)
-        header.add_widget(build_icon_bar())
+        _bar, self._home_btn, self._speak_btn = build_icon_bar()
+        header.add_widget(_bar)
         root.add_widget(header)
 
         self.desc = Label(text="", font_size=sp(13), color=MUTED, size_hint_y=None,
@@ -490,11 +586,12 @@ class CountSelectScreen(VoiceNavMixin, Screen):
         nav_items = []
         for label, n in choices:
             btn = PanelButton(text=label, bg_color=ORANGE_DARK, height=dp(52), font_size=sp(15))
-            btn.bind(on_release=lambda *_a, count=n: app.start_quiz_with_count(count))
+            btn.bind(on_release=guarded_release(lambda app, count=n: app.start_quiz_with_count(count)))
             self.btns_box.add_widget(btn)
-            nav_items.append((f"{label} button", (lambda count=n: app.start_quiz_with_count(count))))
-        nav_items.append(("Home button", lambda: app.confirm_go_home()))
-        nav_items.append(("Speak button, repeats the question count options", lambda: app.repeat_current()))
+            nav_items.append((f"{label} button", (lambda count=n: app.start_quiz_with_count(count)), btn))
+        nav_items.append(("Home button", lambda: app.confirm_go_home(), self._home_btn))
+        nav_items.append(("Speak button, repeats the question count options",
+                           lambda: app.repeat_current(), self._speak_btn))
         self._set_voice_nav_items(nav_items)
 
 
@@ -513,7 +610,8 @@ class QuizScreen(VoiceNavMixin, Screen):
                                      halign="left", valign="middle")
         self.progress_label.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
         header.add_widget(self.progress_label)
-        header.add_widget(build_icon_bar())
+        _bar, self._home_btn, self._speak_btn = build_icon_bar()
+        header.add_widget(_bar)
         root.add_widget(header)
 
         self.mode_label = Label(text="", font_size=sp(11), color=MUTED, halign="left",
@@ -558,7 +656,7 @@ class QuizScreen(VoiceNavMixin, Screen):
 
         self.next_btn = PanelButton(text="Next Question", bg_color=ORANGE, height=dp(52),
                                      font_size=sp(15), disabled=True)
-        self.next_btn.bind(on_release=lambda *_: App.get_running_app().next_question())
+        self.next_btn.bind(on_release=guarded_release(lambda app: app.next_question()))
         root.add_widget(self.next_btn)
 
         self.option_widgets: list[OptionButton] = []
@@ -593,7 +691,7 @@ class QuizScreen(VoiceNavMixin, Screen):
                     btn.bg_color = ORANGE_DARK
             else:
                 btn.bg_color = ORANGE_DARK
-                btn.bind(on_release=lambda _w, idx=i: App.get_running_app().select_option(idx))
+                btn.bind(on_release=guarded_release(lambda app, idx=i: app.select_option(idx)))
             self.options_box.add_widget(btn)
             self.option_widgets.append(btn)
 
@@ -629,14 +727,15 @@ class QuizScreen(VoiceNavMixin, Screen):
         if not locked:
             nav_items = [
                 (f"Option {spoken_letters[i]}: {q['options'][i] if i < len(q['options']) else ''}",
-                 (lambda idx=i: app.select_option(idx)))
+                 (lambda idx=i: app.select_option(idx)), self.option_widgets[i])
                 for i in range(4)
             ]
         else:
             next_label = "Finish Quiz button" if index == total - 1 else "Next Question button"
-            nav_items = [(next_label, lambda: app.next_question())]
-        nav_items.append(("Home button", lambda: app.confirm_go_home()))
-        nav_items.append(("Speak button, repeats the current question", lambda: app.repeat_current()))
+            nav_items = [(next_label, lambda: app.next_question(), self.next_btn)]
+        nav_items.append(("Home button", lambda: app.confirm_go_home(), self._home_btn))
+        nav_items.append(("Speak button, repeats the current question",
+                           lambda: app.repeat_current(), self._speak_btn))
         self._set_voice_nav_items(nav_items)
 
 
@@ -655,7 +754,8 @@ class SummaryScreen(VoiceNavMixin, Screen):
                               color=ORANGE_LIGHT, halign="left", valign="middle")
         self.heading.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
         header.add_widget(self.heading)
-        header.add_widget(build_icon_bar())
+        _bar, self._home_btn, self._speak_btn = build_icon_bar()
+        header.add_widget(_bar)
         root.add_widget(header)
 
         self.score_label = Label(text="", font_size=sp(16), color=FG, size_hint_y=None,
@@ -669,12 +769,12 @@ class SummaryScreen(VoiceNavMixin, Screen):
         root.add_widget(scroller)
 
         actions = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8))
-        retry_btn = PanelButton(text="Retry Incorrect", bg_color=ORANGE, font_size=sp(13))
-        retry_btn.bind(on_release=lambda *_: App.get_running_app().retry_incorrect())
-        new_btn = PanelButton(text="Upload New File", bg_color=PANEL_BG, font_size=sp(13))
-        new_btn.bind(on_release=lambda *_: App.get_running_app().reset_to_landing())
-        actions.add_widget(retry_btn)
-        actions.add_widget(new_btn)
+        self.retry_btn = PanelButton(text="Retry Incorrect", bg_color=ORANGE, font_size=sp(13))
+        self.retry_btn.bind(on_release=guarded_release(lambda app: app.retry_incorrect()))
+        self.new_btn = PanelButton(text="Upload New File", bg_color=PANEL_BG, font_size=sp(13))
+        self.new_btn.bind(on_release=guarded_release(lambda app: app.reset_to_landing()))
+        actions.add_widget(self.retry_btn)
+        actions.add_widget(self.new_btn)
         root.add_widget(actions)
 
     def render(self, questions: list[dict], user_answers: list, correct: int, total: int):
@@ -715,10 +815,10 @@ class SummaryScreen(VoiceNavMixin, Screen):
 
         app = App.get_running_app()
         self._set_voice_nav_items([
-            ("Retry Incorrect button", lambda: app.retry_incorrect()),
-            ("Upload New File button", lambda: app.reset_to_landing()),
-            ("Home button", lambda: app.confirm_go_home()),
-            ("Speak button, repeats your final score", lambda: app.repeat_current()),
+            ("Retry Incorrect button", lambda: app.retry_incorrect(), self.retry_btn),
+            ("Upload New File button", lambda: app.reset_to_landing(), self.new_btn),
+            ("Home button", lambda: app.confirm_go_home(), self._home_btn),
+            ("Speak button, repeats your final score", lambda: app.repeat_current(), self._speak_btn),
         ])
 
 
@@ -779,6 +879,22 @@ class LPTestApp(App):
         except Exception:
             pass  # TTS isn't available on this platform/build -- fail silently
 
+    def voice_guard(self, func):
+        """Wrap a direct single-tap handler so it's a no-op while Voice
+        Guidance is on. Real screen readers require a deliberate
+        double-tap to activate anything specifically so a blind user
+        exploring the screen doesn't accidentally trigger whatever their
+        finger happens to land on first -- this makes every button
+        behave the same way once Voice Guidance is on, activating only
+        through the double-tap-to-activate gesture (see VoiceNavMixin),
+        while leaving plain, ordinary single-tap behavior untouched for
+        sighted users who leave Voice Guidance off."""
+        def wrapped(*args, **kwargs):
+            if self.voice_enabled:
+                return
+            return func(*args, **kwargs)
+        return wrapped
+
     def toggle_voice(self):
         self.voice_enabled = not self.voice_enabled
         self.landing.voice_btn.text = (
@@ -792,10 +908,14 @@ class LPTestApp(App):
         """The Home icon button. Rather than jumping straight back and
         silently discarding an in-progress quiz, ask first -- and read
         the question aloud immediately, since the person tapping this
-        may not be able to see the confirmation dialog that popped up."""
-        self.speak("Go back to the home screen? This will end your current quiz.")
+        may not be able to see the confirmation dialog that popped up.
 
-        content = BoxLayout(orientation="vertical", spacing=dp(14), padding=dp(16))
+        The dialog content is a VoiceNavBoxLayout, not a plain one --
+        without that, swipe/explore/double-tap (and the haptic feedback
+        that goes with them) would silently stop working the moment this
+        popup opened, even though Voice Guidance is still on. That was
+        the bug: gestures worked everywhere except inside this dialog."""
+        content = VoiceNavBoxLayout(orientation="vertical", spacing=dp(14), padding=dp(16))
         msg = Label(
             text="Go back to the home screen?\nThis will end your current quiz.",
             color=FG, font_size=sp(15), halign="center", valign="middle",
@@ -817,14 +937,21 @@ class LPTestApp(App):
             self.reset_to_landing()
 
         stay_btn = PanelButton(text="No, stay here", bg_color=PANEL_BG, font_size=sp(14))
-        stay_btn.bind(on_release=do_stay)
+        stay_btn.bind(on_release=guarded_release(lambda app: do_stay()))
         leave_btn = PanelButton(text="Yes, go home", bg_color=ORANGE, font_size=sp(14))
-        leave_btn.bind(on_release=do_leave)
+        leave_btn.bind(on_release=guarded_release(lambda app: do_leave()))
         btn_row.add_widget(stay_btn)
         btn_row.add_widget(leave_btn)
         content.add_widget(btn_row)
 
+        content._set_voice_nav_items([
+            ("No, stay here button", do_stay, stay_btn),
+            ("Yes, go home button", do_leave, leave_btn),
+        ])
+
         popup.open()
+        self.speak("Go back to the home screen? This will end your current quiz. "
+                    "Swipe to choose, then double-tap to confirm.")
 
     def repeat_current(self):
         """The Speak icon button. Re-reads whatever the current screen is
