@@ -4,12 +4,21 @@ LPTest (Kivy rebuild) — entry point.
 This is a from-scratch UI rewrite of the Tkinter/Windows desktop LPTest,
 built on Kivy so it has a real path to an Android APK (via buildozer /
 python-for-android). The Windows-only pieces of the original app —
-NVDA/JAWS/SAPI screen-reader announcements (accessible_output2), the
-edge-tts "Read Aloud" voice, and Windows drag-and-drop — are Windows APIs
-with no Android equivalent, so they are intentionally NOT part of this
-rebuild (per the tradeoff agreed with the user). Android's own
-accessibility story (TalkBack) is different enough that it would need
-its own separate pass, not a straight port.
+NVDA/JAWS/SAPI screen-reader announcements (accessible_output2) and the
+edge-tts "Read Aloud" voice — are Windows APIs with no Android
+equivalent, so they were dropped in the initial rebuild.
+
+Accessibility note: Kivy draws its entire UI itself via OpenGL, bypassing
+Android's native View hierarchy -- which is exactly what TalkBack reads
+from. That means a Kivy app is invisible to TalkBack by default; there is
+no setting that fixes this, and building real TalkBack support would mean
+exposing Android's AccessibilityNodeInfo tree by hand, a large project on
+its own. What this app does instead is a self-contained *spoken
+navigation mode*: Android's own text-to-speech engine (via plyer) reads
+the question, options, and results aloud automatically as the quiz
+progresses, and every button announces what it does when pressed. It's
+not a replacement for TalkBack, but it means a blind user isn't blocked
+from using the app.
 
 Reused as-is from the desktop app (plain Python, no OS-specific calls):
   - file_parser.py        (PDF/DOCX/TXT text extraction)
@@ -41,6 +50,7 @@ from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.screenmanager import Screen, ScreenManager, NoTransition
 from kivy.uix.scrollview import ScrollView
+from kivy.utils import platform
 
 from file_parser import extract_text
 from question_generator import (
@@ -172,6 +182,11 @@ class LandingScreen(Screen):
                                        font_size=sp(16))
         self.upload_btn.bind(on_release=lambda *_: App.get_running_app().browse_file())
         root.add_widget(self.upload_btn)
+
+        self.voice_btn = PanelButton(text="\U0001F50A Voice Guidance: On", bg_color=PANEL_BG,
+                                      height=dp(48), font_size=sp(13))
+        self.voice_btn.bind(on_release=lambda *_: App.get_running_app().toggle_voice())
+        root.add_widget(self.voice_btn)
 
         self.status_label = Label(text="", font_size=sp(13), color=MUTED,
                                    size_hint_y=None, height=dp(40))
@@ -450,6 +465,7 @@ class LPTestApp(App):
         self.current_quiz_filename: str | None = None
         self._pending_pool: list[dict] = []
         self.locked = False
+        self.voice_enabled = True
 
         try:
             quiz_history.configure_storage_dir(self.user_data_dir)
@@ -463,10 +479,77 @@ class LPTestApp(App):
         self.summary = SummaryScreen(name="summary")
         for s in (self.landing, self.count_select, self.quiz, self.summary):
             self.sm.add_widget(s)
+
+        Clock.schedule_once(lambda *_: self.speak(
+            "Welcome to LPTest. Tap Upload File to begin, or tap Voice Guidance "
+            "to turn off spoken narration."
+        ), 1.0)
         return self.sm
+
+    # -- spoken navigation (accessibility) --------------------------------
+    def speak(self, text: str):
+        """Speak `text` aloud via the device's own text-to-speech engine.
+
+        Kivy draws its whole UI itself (OpenGL), bypassing the Android
+        View hierarchy TalkBack reads from -- so a Kivy app is invisible
+        to TalkBack no matter what we do inside Kivy. This is the
+        pragmatic alternative: the app narrates itself. Every screen
+        transition and quiz event speaks what just happened/what's on
+        screen, so a blind user can follow along and act on it without
+        needing to see anything, even though it isn't real TalkBack
+        gesture navigation."""
+        if not self.voice_enabled or not text:
+            return
+        try:
+            from plyer import tts
+            tts.speak(message=text)
+        except Exception:
+            pass  # TTS isn't available on this platform/build -- fail silently
+
+    def toggle_voice(self):
+        self.voice_enabled = not self.voice_enabled
+        self.landing.voice_btn.text = (
+            "\U0001F50A Voice Guidance: On" if self.voice_enabled
+            else "\U0001F507 Voice Guidance: Off"
+        )
+        if self.voice_enabled:
+            self.speak("Voice guidance on.")
 
     # -- file loading -----------------------------------------------------
     def browse_file(self):
+        self.speak("Opening file picker.")
+        if platform == "android":
+            try:
+                from plyer import filechooser
+                filechooser.open_file(
+                    on_selection=self._on_android_file_selected,
+                    filters=[f"*{e}" for e in SUPPORTED_EXT],
+                )
+                return
+            except Exception:
+                pass  # fall through to the desktop-style picker as a backup
+        self._browse_file_desktop()
+
+    def _on_android_file_selected(self, selection):
+        # plyer's Android file-picker callback can arrive off the main
+        # thread -- hop back onto it before touching any Kivy widget.
+        Clock.schedule_once(lambda *_: self._handle_file_selection(selection), 0)
+
+    def _handle_file_selection(self, selection):
+        if not selection:
+            self.speak("No file selected.")
+            return
+        self.load_file(selection[0])
+
+    def _browse_file_desktop(self):
+        """Kivy's own in-window file browser. Used on desktop, where a
+        real filesystem path is always meaningful. On Android this is
+        NOT used -- Android's scoped storage means an app-drawn file
+        browser starting at a plain filesystem path can't see the
+        user's actual Documents/Downloads at all, which was the original
+        bug report ("can't select a file"). Android instead goes through
+        browse_file()'s plyer/SAF path above, which opens the real
+        system file picker and needs no storage permission."""
         chooser = FileChooserListView(filters=["*" + e for e in SUPPORTED_EXT] + ["*.*"],
                                        path=os.path.expanduser("~"))
         popup_box = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8))
@@ -492,13 +575,18 @@ class LPTestApp(App):
     def load_file(self, path: str):
         self.landing.status_label.text = f"Reading {os.path.basename(path)} \u2026"
         self.landing.status_label.color = MUTED
+        self.speak(f"Reading {os.path.basename(path)}. Please wait.")
         Clock.schedule_once(lambda *_: self._load_file_now(path), 0.05)
+
+    def _fail_load(self, message: str):
+        self.landing.status_label.text = message
+        self.landing.status_label.color = RED
+        self.speak(message)
 
     def _load_file_now(self, path: str):
         result = extract_text(path)
         if result.error:
-            self.landing.status_label.text = result.error
-            self.landing.status_label.color = RED
+            self._fail_load(result.error)
             return
 
         self.filepath = path
@@ -516,11 +604,10 @@ class LPTestApp(App):
         chunks = chunk_text(result.text, result.headings)
         questions, skipped = generate_questions(chunks, result.text)
         if not questions:
-            self.landing.status_label.text = (
+            self._fail_load(
                 "We couldn't find enough distinct facts in this file to build a fair "
                 "quiz (need at least 4 distinct facts). Try a longer or more detailed file."
             )
-            self.landing.status_label.color = RED
             return
 
         skip_note = f" ({len(skipped)} section(s) skipped.)" if skipped else ""
@@ -538,6 +625,8 @@ class LPTestApp(App):
         choices.append((f"All Questions ({total})", total))
         self.count_select.show_choices(choices, total, self.mode_note)
         self.sm.current = "count_select"
+        labels = ", ".join(label for label, _ in choices)
+        self.speak(f"{self.mode_note} How many questions would you like? Choose from: {labels}.")
 
     def start_quiz_with_count(self, count: int):
         import random
@@ -561,6 +650,15 @@ class LPTestApp(App):
             self.locked = True
         self.quiz.render(q, self.current_index, len(self.questions), self.mode_note,
                           self.locked, prior)
+        if not self.locked:
+            letters = ["A", "B", "C", "D"]
+            opts = ". ".join(
+                f"Option {letters[i]}: {q['options'][i]}" for i in range(min(4, len(q["options"])))
+            )
+            self.speak(
+                f"Question {self.current_index + 1} of {len(self.questions)}. "
+                f"{q['question']} {opts}"
+            )
 
     def select_option(self, idx: int):
         if self.locked:
@@ -568,6 +666,19 @@ class LPTestApp(App):
         self.locked = True
         self.user_answers[self.current_index] = idx
         self.render_question()
+
+        letters = ["A", "B", "C", "D"]
+        q = self.questions[self.current_index]
+        correct_idx = q.get("correctIndex")
+        if idx == correct_idx:
+            msg = "Correct! Well done."
+        else:
+            correct_text = q["options"][correct_idx] if correct_idx is not None else "unknown"
+            letter = letters[correct_idx] if correct_idx is not None else "?"
+            msg = f"Incorrect. The correct answer is option {letter}: {correct_text}."
+        if q.get("explanation"):
+            msg += f" Why: {q['explanation']}"
+        self.speak(msg)
 
     def next_question(self):
         if self.current_index >= len(self.questions) - 1:
@@ -593,6 +704,7 @@ class LPTestApp(App):
             )
         self.summary.render(self.questions, self.user_answers, correct, total)
         self.sm.current = "summary"
+        self.speak(f"Quiz complete. You scored {correct} out of {total}.")
 
     def retry_incorrect(self):
         wrong = [q for i, q in enumerate(self.questions)
@@ -611,6 +723,7 @@ class LPTestApp(App):
         self.current_quiz_filename = None
         self.landing.status_label.text = ""
         self.sm.current = "landing"
+        self.speak("Back to the home screen. Tap Upload File to begin.")
 
     # -- history actions -----------------------------------------------------
     def retake_entry(self, entry: dict):
