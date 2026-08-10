@@ -20,7 +20,6 @@ fullscreen = 0
 # Needed so the app can read a file the user picks (SAF-backed picks on
 # Android 11+ don't require this, but requesting it keeps older devices
 # and "browse a shared folder" style pickers working too).
-android.permissions = READ_EXTERNAL_STORAGE
 
 # Reasonable modern floor/ceiling -- adjust upward over time as Google
 # raises the minimum target API required for Play Store submissions.
