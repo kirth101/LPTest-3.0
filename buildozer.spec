@@ -8,18 +8,24 @@ source.include_exts = py,png,jpg,kv,atlas,txt
 
 version = 1.0
 
-# python-for-align/pip package requirements needed on-device.
+# python-for-android pip package requirements needed on-device.
 # - kivy: the UI framework this app is built on
 # - pypdf: PDF text extraction (file_parser.py)
-# - python-docx (+ lxml): .docx text extraction (file_parser.py)
+# - plyer: native Android file picker (SAF), text-to-speech, and haptic
+#   vibration feedback for the spoken-navigation accessibility mode
+#   (see main.py's speak() / VoiceNavMixin)
+# (DOCX extraction uses only the Python standard library -- see
+# file_parser.py -- specifically to avoid lxml, whose Android build
+# recipe is broken against current NDK/Python versions.)
 requirements = python3==3.11.9,hostpython3==3.11.9,kivy==2.3.1,pypdf,plyer
 
 orientation = portrait
 fullscreen = 0
 
-# Needed so the app can read a file the user picks (SAF-backed picks on
-# Android 11+ don't require this, but requesting it keeps older devices
-# and "browse a shared folder" style pickers working too).
+# VIBRATE: haptic feedback on the swipe/double-tap accessibility gestures.
+# The file picker (Storage Access Framework) and text-to-speech need no
+# runtime permission.
+android.permissions = VIBRATE
 
 # Reasonable modern floor/ceiling -- adjust upward over time as Google
 # raises the minimum target API required for Play Store submissions.
