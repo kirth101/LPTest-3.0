@@ -1,33 +1,9 @@
 """
 LPTest (Kivy rebuild) — entry point.
 
-This is a from-scratch UI rewrite of the Tkinter/Windows desktop LPTest,
-built on Kivy so it has a real path to an Android APK (via buildozer /
-python-for-android). The Windows-only pieces of the original app —
-NVDA/JAWS/SAPI screen-reader announcements (accessible_output2) and the
-edge-tts "Read Aloud" voice — are Windows APIs with no Android
-equivalent, so they were dropped in the initial rebuild.
-
-Accessibility note: Kivy draws its entire UI itself via OpenGL, bypassing
-Android's native View hierarchy -- which is exactly what TalkBack reads
-from. That means a Kivy app is invisible to TalkBack by default; there is
-no setting that fixes this, and building real TalkBack support would mean
-exposing Android's AccessibilityNodeInfo tree by hand, a large project on
-its own. What this app does instead is a self-contained *spoken
-navigation mode*: Android's own text-to-speech engine (via plyer) reads
-the question, options, and results aloud automatically as the quiz
-progresses, and every button announces what it does when pressed. It's
-not a replacement for TalkBack, but it means a blind user isn't blocked
-from using the app.
-
-Reused as-is from the desktop app (plain Python, no OS-specific calls):
-  - file_parser.py        (PDF/DOCX/TXT text extraction)
-  - question_generator.py (detects existing Q&A in a file, or generates
-                            new multiple-choice questions from it)
-  - quiz_history.py        (local JSON history of past attempts)
-
-Run on desktop for development/testing with:   python main.py
-Build an Android .apk with:                     buildozer -v android debug
+Built on Kivy for Android (buildozer / python-for-android).
+Features self-contained spoken navigation, custom sound effects,
+haptic feedback, and Android TTS voice selection.
 """
 from __future__ import annotations
 
@@ -50,6 +26,8 @@ from kivy.uix.screenmanager import Screen, ScreenManager, NoTransition
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.widget import Widget
 from kivy.uix.slider import Slider
+from kivy.uix.spinner import Spinner
+from kivy.core.audio import SoundLoader
 from kivy.utils import platform
 
 from file_parser import extract_text
@@ -60,6 +38,19 @@ from question_generator import (
     generate_questions,
 )
 import quiz_history
+
+# ---------------------------------------------------------------------------
+# Swipe Sound Effect Setup
+# ---------------------------------------------------------------------------
+SWIPE_SOUND = SoundLoader.load('swipe.wav')
+
+def play_swipe_sound():
+    if SWIPE_SOUND:
+        try:
+            SWIPE_SOUND.stop()
+            SWIPE_SOUND.play()
+        except Exception as e:
+            print(f"LPTest: Audio play error: {e}")
 
 # ---------------------------------------------------------------------------
 # Palette — purple/violet theme
@@ -259,6 +250,7 @@ def option_font_size(options: list[str]) -> int:
 
 class _AndroidTTS:
     _engine = None
+    _selected_voice = None
 
     @classmethod
     def _get_engine(cls):
@@ -270,6 +262,34 @@ class _AndroidTTS:
             cls._engine = TextToSpeech(PythonActivity.mActivity, None)
             cls._engine.setLanguage(Locale.US)
         return cls._engine
+
+    @classmethod
+    def get_available_voices(cls) -> list[tuple[str, object]]:
+        if platform != "android":
+            return []
+        try:
+            engine = cls._get_engine()
+            from jnius import autoclass
+            Build_VERSION = autoclass("android.os.Build$VERSION")
+            if Build_VERSION.SDK_INT >= 21:
+                voices = engine.getVoices()
+                if voices:
+                    v_list = []
+                    for v in voices.toArray():
+                        v_list.append((v.getName(), v))
+                    return v_list
+        except Exception as e:
+            print(f"LPTest: Error getting voices: {e}")
+        return []
+
+    @classmethod
+    def set_voice_by_name(cls, name: str):
+        voices = cls.get_available_voices()
+        for v_name, v_obj in voices:
+            if v_name == name:
+                cls._get_engine().setVoice(v_obj)
+                cls._selected_voice = v_name
+                break
 
     @classmethod
     def speak(cls, message: str, rate: float = 1.0):
@@ -343,10 +363,11 @@ class VoiceNavMixin:
             self._voice_nav_index = 0
 
     def _haptic(self, short: bool = True):
+        play_swipe_sound()
         if platform != "android":
             return
         try:
-            _android_vibrate(0.015 if short else 0.035)
+            _android_vibrate(0.02 if short else 0.05)
         except Exception as e:
             print(f"LPTest: haptic feedback failed: {e}")
 
@@ -358,13 +379,6 @@ class VoiceNavMixin:
             self._haptic(short=True)
         label, _callback, _widget = self._voice_nav_items[index]
         App.get_running_app().speak(label)
-
-    def _voice_nav_speak_current(self):
-        app = App.get_running_app()
-        if not app.voice_enabled or not self._voice_nav_items:
-            return
-        label, _callback, _widget = self._voice_nav_items[self._voice_nav_index]
-        app.speak(label)
 
     def _voice_nav_move(self, delta: int):
         if not self._voice_nav_items:
@@ -399,6 +413,8 @@ class VoiceNavMixin:
             hit = self._voice_nav_hit_test(touch.pos)
             if hit is not None:
                 self._voice_nav_focus(hit)
+            super().on_touch_down(touch)
+            return True
         return super().on_touch_down(touch)
 
     def on_touch_move(self, touch):
@@ -407,6 +423,8 @@ class VoiceNavMixin:
             hit = self._voice_nav_hit_test(touch.pos)
             if hit is not None:
                 self._voice_nav_focus(hit)
+            # Pigilan ang pag-scroll habang nag-s-swipe
+            return True
         return super().on_touch_move(touch)
 
     def on_touch_up(self, touch):
@@ -430,6 +448,8 @@ class VoiceNavMixin:
                     return True
                 self._last_tap_time = now
                 self._last_tap_pos = touch.pos
+            self._swipe_start = None
+            return True
         self._swipe_start = None
         return super().on_touch_up(touch)
 
@@ -450,7 +470,6 @@ class LandingScreen(VoiceNavMixin, Screen):
         root = BoxLayout(orientation="vertical", padding=dp(24), spacing=dp(12))
         self.add_widget(root)
 
-        # 1. CENTERED HEADER (No Speak icon on top-right)
         header = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(60), spacing=dp(2))
         
         title = Label(
@@ -478,7 +497,6 @@ class LandingScreen(VoiceNavMixin, Screen):
         header.add_widget(subtitle)
         root.add_widget(header)
 
-        # 2. INSTRUCTIONS
         instructions = Label(
             text="Upload a file to start the quiz\nYou can turn On/Off the voice assistant below",
             font_size=sp(14),
@@ -490,7 +508,6 @@ class LandingScreen(VoiceNavMixin, Screen):
         instructions.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
         root.add_widget(instructions)
 
-        # 3. UPLOAD BUTTON
         self.upload_btn = PanelButton(
             text="Upload a file",
             bg_color=PURPLE,
@@ -500,7 +517,6 @@ class LandingScreen(VoiceNavMixin, Screen):
         self.upload_btn.bind(on_release=lambda *_: App.get_running_app().browse_file())
         root.add_widget(self.upload_btn)
 
-        # 4. VOICE GUIDANCE & SETTINGS BUTTON
         toggle_row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(10))
         self.voice_btn = PanelButton(
             text="Voice Guidance On",
@@ -524,7 +540,6 @@ class LandingScreen(VoiceNavMixin, Screen):
         )
         root.add_widget(self.status_label)
 
-        # 5. PREVIOUS QUIZZES HEADING (Centered)
         prev_label = Label(
             text="Your Previous Quizzes",
             font_size=sp(16),
@@ -930,17 +945,18 @@ class LPTestApp(App):
             self.speak("Voice guidance on.")
 
     def open_settings(self):
-        content = BoxLayout(orientation="vertical", spacing=dp(16), padding=dp(20))
+        content = BoxLayout(orientation="vertical", spacing=dp(12), padding=dp(16))
+        
         content.add_widget(Label(
-            text="Voice Guidance Speech Rate", font_size=sp(16), bold=True,
-            color=FG, size_hint_y=None, height=dp(28)
+            text="Voice Guidance Speech Rate", font_size=sp(15), bold=True,
+            color=FG, size_hint_y=None, height=dp(24)
         ))
-        rate_label = Label(text=f"{self.speech_rate:.1f}x", font_size=sp(22), bold=True,
-                            color=PURPLE_LIGHT, size_hint_y=None, height=dp(40))
+        rate_label = Label(text=f"{self.speech_rate:.1f}x", font_size=sp(20), bold=True,
+                            color=PURPLE_LIGHT, size_hint_y=None, height=dp(32))
         content.add_widget(rate_label)
 
         slider = Slider(min=0.5, max=2.0, value=self.speech_rate, step=0.1,
-                         size_hint_y=None, height=dp(40))
+                         size_hint_y=None, height=dp(36))
 
         def on_change(_slider, value):
             self.speech_rate = round(value, 1)
@@ -949,24 +965,42 @@ class LPTestApp(App):
         slider.bind(value=on_change)
         content.add_widget(slider)
 
-        speed_row = BoxLayout(size_hint_y=None, height=dp(20), spacing=dp(8))
-        speed_row.add_widget(Label(text="Slower", font_size=sp(11), color=MUTED))
-        speed_row.add_widget(Label(text="Faster", font_size=sp(11), color=MUTED))
-        content.add_widget(speed_row)
+        # Android TTS Voice Selection
+        voices = _AndroidTTS.get_available_voices()
+        if voices:
+            content.add_widget(Label(
+                text="Select TTS Voice", font_size=sp(15), bold=True,
+                color=FG, size_hint_y=None, height=dp(24)
+            ))
+            voice_names = [v[0] for v in voices]
+            current_voice = _AndroidTTS._selected_voice or voice_names[0]
+            
+            voice_spinner = Spinner(
+                text=current_voice,
+                values=voice_names,
+                size_hint_y=None,
+                height=dp(44),
+                background_color=PANEL_BG,
+                color=FG
+            )
+            def on_voice_select(_spinner, text):
+                _AndroidTTS.set_voice_by_name(text)
+                self.speak(f"Voice changed to {text}")
 
-        test_btn = PanelButton(text="Test Voice", bg_color=PURPLE, font_size=sp(14), height=dp(48))
-        test_btn.bind(on_release=lambda *_: self.speak(
-            "This is a test of the voice guidance speech rate."))
+            voice_spinner.bind(text=on_voice_select)
+            content.add_widget(voice_spinner)
+
+        test_btn = PanelButton(text="Test Voice", bg_color=PURPLE, font_size=sp(14), height=dp(44))
+        test_btn.bind(on_release=lambda *_: self.speak("This is a test of the voice guidance speech rate."))
         content.add_widget(test_btn)
 
-        popup = Popup(title="Settings", content=content, size_hint=(0.85, 0.55))
-        close_btn = PanelButton(text="Close", bg_color=PANEL_BG, font_size=sp(14), height=dp(48))
+        popup = Popup(title="Settings", content=content, size_hint=(0.9, 0.75))
+        close_btn = PanelButton(text="Close", bg_color=PANEL_BG, font_size=sp(14), height=dp(44))
         close_btn.bind(on_release=lambda *_: popup.dismiss())
         content.add_widget(close_btn)
 
         popup.open()
-        self.speak(f"Settings. Speech rate is {self.speech_rate:.1f} times normal speed. "
-                    "Drag the slider to change it, or tap Test Voice to hear it.")
+        self.speak("Settings opened.")
 
     def confirm_go_home(self):
         content = VoiceNavBoxLayout(orientation="vertical", spacing=dp(14), padding=dp(16))
