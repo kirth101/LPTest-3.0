@@ -4,7 +4,7 @@ package.name = lptest
 package.domain = org.lptest
 
 source.dir = .
-source.include_exts = py,png,jpg,kv,atlas,txt
+source.include_exts = py,png,jpg,kv,atlas,wav,mp3
 
 version = 1.0
 
@@ -25,7 +25,7 @@ fullscreen = 0
 # VIBRATE: haptic feedback on the swipe/double-tap accessibility gestures.
 # The file picker (Storage Access Framework) and text-to-speech need no
 # runtime permission.
-android.permissions = VIBRATE
+android.permissions = INTERNET, VIBRATE
 
 # Reasonable modern floor/ceiling -- adjust upward over time as Google
 # raises the minimum target API required for Play Store submissions.
