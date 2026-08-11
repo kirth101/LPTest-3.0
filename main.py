@@ -28,9 +28,6 @@ Reused as-is from the desktop app (plain Python, no OS-specific calls):
 
 Run on desktop for development/testing with:   python main.py
 Build an Android .apk with:                     buildozer -v android debug
-(see README_ANDROID.md for the full explanation of why that build step
-can't be run inside this chat, and the two easiest ways to run it
-yourself.)
 """
 from __future__ import annotations
 
@@ -79,7 +76,6 @@ GREEN = (0.184, 0.682, 0.306, 1)
 RED = (0.851, 0.263, 0.184, 1)
 MUTED = (0.659, 0.659, 0.659, 1)
 
-# Change this to however you'd like to be credited on the home screen.
 DEVELOPER_NAME = "Direk Allan"
 
 SUPPORTED_EXT = [".pdf", ".docx", ".doc", ".txt"]
@@ -132,13 +128,6 @@ class PanelButton(Button):
 
 
 class _RoundIconButton(ButtonBehavior, Widget):
-    """Base for the small round Home / Speak buttons. Draws its icon as
-    plain vector lines instead of an emoji/symbol character -- emoji
-    glyphs depend on the device having a font that includes them, and
-    Kivy's bundled default font doesn't, so text like "\U0001F3E0" was
-    rendering as an empty tofu box on-device instead of an actual icon.
-    Vector lines always render correctly, on every device, regardless of
-    font support."""
     bg_color = ListProperty(PURPLE)
 
     def __init__(self, **kwargs):
@@ -155,8 +144,6 @@ class _RoundIconButton(ButtonBehavior, Widget):
         self._redraw()
 
     def _build_lines(self):
-        """Subclasses return a list of Line() instances (empty points to
-        start; _redraw() fills them in based on current size)."""
         raise NotImplementedError
 
     def _recolor(self, *_a):
@@ -213,9 +200,6 @@ class SpeakIconButton(_RoundIconButton):
 
 
 class GearIconButton(ButtonBehavior, Widget):
-    """Plain gear/settings icon -- deliberately without a filled circle
-    background (unlike Home/Speak), matching the understated gray gear
-    that sits next to the Voice Guidance toggle in the reference design."""
     def __init__(self, **kwargs):
         kwargs.setdefault("size_hint", (None, None))
         kwargs.setdefault("size", (dp(36), dp(36)))
@@ -262,13 +246,6 @@ class HistoryRow(BoxLayout):
 
 
 def option_font_size(options: list[str]) -> int:
-    """Same idea as the desktop app's adaptive sizing: short options keep
-    a comfortably large, thumb-friendly size; only genuinely long options
-    step down. Unlike the desktop version we don't need pixel-perfect fit
-    math here, because every options list lives inside a ScrollView (see
-    QuizScreen) -- so nothing can ever get clipped/cut off the way the
-    original Tkinter bug did. sp() (not dp()) is used so this also
-    respects the user's own OS-level font-size/accessibility setting."""
     longest = max((len(o) for o in options), default=0)
     total = sum(len(o) for o in options)
     if longest <= 30 and total <= 140:
@@ -281,13 +258,6 @@ def option_font_size(options: list[str]) -> int:
 
 
 class _AndroidTTS:
-    """Direct Android TextToSpeech wrapper (bypassing plyer.tts).
-
-    plyer.tts recreates a brand-new TextToSpeech engine from scratch on
-    every single call and polls in a sleep loop waiting for it to become
-    ready -- slow, and it exposes no way to set a speech rate at all.
-    This keeps one engine alive for the whole app (fast, immediate) and
-    supports setSpeechRate() for the Settings screen."""
     _engine = None
 
     @classmethod
@@ -311,10 +281,6 @@ class _AndroidTTS:
 
 
 def _android_vibrate(seconds: float):
-    """Direct Android Vibrator wrapper (bypassing plyer.vibrator), used
-    for the haptic pulses on every focus change/activation. Kept as a
-    plain function (not tied to any particular engine instance) since,
-    unlike TTS, there's no setup cost worth caching here."""
     from jnius import autoclass, cast
     Context = autoclass("android.content.Context")
     PythonActivity = autoclass("org.kivy.android.PythonActivity")
@@ -332,12 +298,6 @@ def _android_vibrate(seconds: float):
 
 
 def guarded_release(action):
-    """Wrap a click handler (taking the running App as its one argument)
-    so it's a no-op while Voice Guidance is on -- see App.voice_guard.
-    Used for every ordinary on_release binding in the UI so direct
-    single-taps only work when Voice Guidance is off; while it's on,
-    only the double-tap-to-activate gesture (VoiceNavMixin) activates
-    anything."""
     def handler(*_a):
         app = App.get_running_app()
         app.voice_guard(action)(app)
@@ -345,12 +305,6 @@ def guarded_release(action):
 
 
 def build_icon_bar(show_home: bool = True):
-    """Home + Speak round icon buttons, sized to sit inline in a header
-    row (next to a title/progress label) rather than floating on top of
-    other content -- floating over the mode-note text was the visual bug
-    reported earlier. Returns (bar, home_btn_or_None, speak_btn) so the
-    caller can also register the buttons themselves as voice-nav items
-    (with a real widget reference, so explore-by-touch can find them)."""
     width = dp(44) * (2 if show_home else 1) + (dp(8) if show_home else 0)
     bar = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint=(None, None),
                      size=(width, dp(44)))
@@ -366,34 +320,6 @@ def build_icon_bar(show_home: bool = True):
 
 
 class VoiceNavMixin:
-    """Adds TalkBack-style touch navigation to a Screen (or any widget),
-    active only while Voice Guidance is on:
-
-    - Explore by touch: dragging a finger across the screen moves focus
-      onto whatever item it passes over and announces it immediately,
-      like sliding a finger around to feel what's there.
-    - Swipe left/right: moves focus to the previous/next item without
-      needing to land exactly on it -- handy when exploring isn't
-      practical.
-    - Double-tap anywhere: activates whichever item currently has focus.
-    - A short, distinct haptic pulse fires on every focus change and on
-      activation, the same tactile confirmation TalkBack gives, so it
-      reads as responsive rather than laggy.
-
-    Every screen that uses this mixin populates `self._voice_nav_items`
-    with (spoken_label, activate_callable, widget_or_None) covering
-    everything meaningfully tappable on that screen -- including its own
-    Home/Speak icons -- as soon as its content is built or changes. The
-    widget reference is what makes touch-exploration possible: without
-    it we can only do discrete swipes, not "what's under my finger".
-
-    While Voice Guidance is on, ordinary single taps on buttons are
-    intentionally NOT wired to activate anything directly (see
-    App.voice_guard) -- only double-tap-to-activate does. That matches
-    how a real screen reader behaves and protects a blind user from
-    accidentally triggering the wrong thing while exploring; a sighted
-    user who doesn't want this can just turn Voice Guidance off."""
-
     _SWIPE_THRESHOLD = dp(28)
     _DOUBLE_TAP_WINDOW = 0.3
     _DOUBLE_TAP_RADIUS = dp(60)
@@ -417,13 +343,6 @@ class VoiceNavMixin:
             self._voice_nav_index = 0
 
     def _haptic(self, short: bool = True):
-        """A quick vibration pulse -- 15ms for a focus move, 35ms for an
-        activation -- so exploring/swiping feels immediate and alive
-        instead of silent or laggy. Goes straight through Android's own
-        Vibrator API (see _android_vibrate) rather than plyer.vibrator,
-        which had the same "recreate everything, hope it works" fragility
-        as plyer.tts did -- this is easier to reason about and to debug
-        if a pulse ever silently fails to fire."""
         if platform != "android":
             return
         try:
@@ -462,11 +381,6 @@ class VoiceNavMixin:
             callback()
 
     def _voice_nav_hit_test(self, window_pos) -> int | None:
-        """Which nav item (if any) is under `window_pos`, correctly
-        accounting for scrolling/nesting -- to_widget() walks up the
-        widget tree applying every ancestor's transform (including a
-        ScrollView's current scroll offset), so this still works for
-        options that have scrolled partway off-screen."""
         for idx, (_label, _callback, widget) in enumerate(self._voice_nav_items):
             if widget is None or widget.parent is None:
                 continue
@@ -482,8 +396,6 @@ class VoiceNavMixin:
         app = App.get_running_app()
         if app.voice_enabled and self.collide_point(*touch.pos):
             self._swipe_start = touch.pos
-            # Explore-by-touch: landing a finger directly on an item
-            # focuses it immediately, same as real screen readers.
             hit = self._voice_nav_hit_test(touch.pos)
             if hit is not None:
                 self._voice_nav_focus(hit)
@@ -495,8 +407,6 @@ class VoiceNavMixin:
             hit = self._voice_nav_hit_test(touch.pos)
             if hit is not None:
                 self._voice_nav_focus(hit)
-        # Never swallow move events -- a ScrollView underneath still
-        # needs them to keep scrolling working while exploring.
         return super().on_touch_move(touch)
 
     def on_touch_up(self, touch):
@@ -507,10 +417,6 @@ class VoiceNavMixin:
             import time as _time
             now = _time.time()
             if abs(dx) > self._SWIPE_THRESHOLD and abs(dx) > abs(dy):
-                # Horizontal swipe -> move focus. Right = next, left =
-                # previous (the usual screen-reader convention). Vertical
-                # drags fall through untouched below, so normal
-                # scrolling still works everywhere it's needed.
                 self._voice_nav_move(1 if dx > 0 else -1)
                 self._swipe_start = None
                 return True
@@ -529,10 +435,6 @@ class VoiceNavMixin:
 
 
 class VoiceNavBoxLayout(VoiceNavMixin, BoxLayout):
-    """A plain BoxLayout with the same touch-exploration/swipe/double-tap
-    behavior as a Screen -- used for Popup content (e.g. the "leave
-    quiz?" confirmation), since a Popup isn't a Screen and wouldn't
-    otherwise get any of this."""
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._voice_nav_init()
@@ -548,57 +450,93 @@ class LandingScreen(VoiceNavMixin, Screen):
         root = BoxLayout(orientation="vertical", padding=dp(24), spacing=dp(12))
         self.add_widget(root)
 
-        header = BoxLayout(size_hint_y=None, height=dp(50))
-        title_box = BoxLayout(orientation="vertical")
-        title = Label(text="Welcome to LPTest", font_size=sp(24), bold=True,
-                      color=PURPLE_LIGHT, halign="left", valign="bottom")
+        # 1. CENTERED HEADER (No Speak icon on top-right)
+        header = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(60), spacing=dp(2))
+        
+        title = Label(
+            text="[color=#9d8ec8]Welcome to [/color][color=#3be5d5]LPTest[/color]",
+            markup=True,
+            font_size=sp(24),
+            bold=True,
+            halign="center",
+            valign="middle",
+            size_hint_x=1
+        )
         title.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
-        subtitle = Label(text=f"Developed by {DEVELOPER_NAME}", font_size=sp(13),
-                          color=PURPLE_LIGHT, halign="left", valign="top")
+
+        subtitle = Label(
+            text=f"Developed by {DEVELOPER_NAME}",
+            font_size=sp(14),
+            color=(0.52, 0.35, 0.85, 1),
+            halign="center",
+            valign="middle",
+            size_hint_x=1
+        )
         subtitle.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
-        title_box.add_widget(title)
-        title_box.add_widget(subtitle)
-        header.add_widget(title_box)
-        _bar, _home, self._speak_btn = build_icon_bar(show_home=False)
-        header.add_widget(_bar)
+
+        header.add_widget(title)
+        header.add_widget(subtitle)
         root.add_widget(header)
 
+        # 2. INSTRUCTIONS
         instructions = Label(
             text="Upload a file to start the quiz\nYou can turn On/Off the voice assistant below",
-            font_size=sp(14), color=FG, size_hint_y=None, height=dp(56), halign="center"
+            font_size=sp(14),
+            color=FG,
+            size_hint_y=None,
+            height=dp(56),
+            halign="center"
         )
         instructions.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
         root.add_widget(instructions)
 
-        self.upload_btn = PanelButton(text="Upload a file", bg_color=PURPLE, height=dp(56),
-                                       font_size=sp(17))
-        # Direct single-tap, deliberately NOT gated behind Voice Guidance
-        # (see App.voice_guard) -- this is the home screen, and a sighted
-        # user (or someone helping a blind user) needs a simple, ordinary
-        # tap here at all times, most importantly to switch Voice
-        # Guidance off again without first having to learn the
-        # swipe/double-tap gestures. It's still also reachable via
-        # explore+double-tap below, for a blind user starting the app.
+        # 3. UPLOAD BUTTON
+        self.upload_btn = PanelButton(
+            text="Upload a file",
+            bg_color=PURPLE,
+            height=dp(56),
+            font_size=sp(17)
+        )
         self.upload_btn.bind(on_release=lambda *_: App.get_running_app().browse_file())
         root.add_widget(self.upload_btn)
 
+        # 4. VOICE GUIDANCE & SETTINGS BUTTON
         toggle_row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(10))
-        self.voice_btn = PanelButton(text="Voice Guidance On", bg_color=PANEL_BG,
-                                      font_size=sp(14))
+        self.voice_btn = PanelButton(
+            text="Voice Guidance On",
+            bg_color=PANEL_BG,
+            font_size=sp(14)
+        )
         self.voice_btn.bind(on_release=lambda *_: App.get_running_app().toggle_voice())
         toggle_row.add_widget(self.voice_btn)
+        
         self.gear_btn = GearIconButton()
         self.gear_btn.bind(on_release=lambda *_: App.get_running_app().open_settings())
         toggle_row.add_widget(self.gear_btn)
         root.add_widget(toggle_row)
 
-        self.status_label = Label(text="", font_size=sp(13), color=MUTED,
-                                   size_hint_y=None, height=dp(40))
+        self.status_label = Label(
+            text="",
+            font_size=sp(13),
+            color=MUTED,
+            size_hint_y=None,
+            height=dp(40)
+        )
         root.add_widget(self.status_label)
 
-        root.add_widget(Label(text="Your Previous Quizzes", font_size=sp(16), bold=True,
-                               color=PINK_ACCENT, size_hint_y=None, height=dp(36),
-                               halign="left", valign="middle"))
+        # 5. PREVIOUS QUIZZES HEADING (Centered)
+        prev_label = Label(
+            text="Your Previous Quizzes",
+            font_size=sp(16),
+            bold=True,
+            color=PINK_ACCENT,
+            size_hint_y=None,
+            height=dp(36),
+            halign="center",
+            valign="middle"
+        )
+        prev_label.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
+        root.add_widget(prev_label)
 
         self.history_list = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(8))
         self.history_list.bind(minimum_height=self.history_list.setter("height"))
@@ -606,17 +544,11 @@ class LandingScreen(VoiceNavMixin, Screen):
         scroller.add_widget(self.history_list)
         root.add_widget(scroller)
 
-        # Swipe/explore-reachable from the moment the app opens -- this is
-        # the screen a blind user lands on first, so "Upload a file" has
-        # to be reachable here by touch, not just once already inside a
-        # quiz. Direct tap ALSO works on every one of these (see above),
-        # so this is a second, parallel way to reach the same actions.
         app = App.get_running_app
         self._set_voice_nav_items([
             ("Upload a file button", lambda: app().browse_file(), self.upload_btn),
             ("Voice Guidance toggle button", lambda: app().toggle_voice(), self.voice_btn),
             ("Settings button", lambda: app().open_settings(), self.gear_btn),
-            ("Speak button, repeats the welcome message", lambda: app().repeat_current(), self._speak_btn),
         ])
 
     def on_pre_enter(self, *_a):
@@ -629,8 +561,6 @@ class LandingScreen(VoiceNavMixin, Screen):
             ("Upload a file button", lambda: App.get_running_app().browse_file(), self.upload_btn),
             ("Voice Guidance toggle button", lambda: App.get_running_app().toggle_voice(), self.voice_btn),
             ("Settings button", lambda: App.get_running_app().open_settings(), self.gear_btn),
-            ("Speak button, repeats the welcome message",
-             lambda: App.get_running_app().repeat_current(), self._speak_btn),
         ]
         if not history:
             self.history_list.add_widget(Label(
@@ -693,7 +623,7 @@ class CountSelectScreen(VoiceNavMixin, Screen):
         self.btns_box = BoxLayout(orientation="vertical", spacing=dp(10), size_hint_y=None)
         self.btns_box.bind(minimum_height=self.btns_box.setter("height"))
         root.add_widget(self.btns_box)
-        root.add_widget(BoxLayout())  # spacer
+        root.add_widget(BoxLayout())
 
     def show_choices(self, choices: list[tuple[str, int]], total: int, mode_note: str):
         self.desc.text = mode_note or f"{total} questions available."
@@ -735,9 +665,6 @@ class QuizScreen(VoiceNavMixin, Screen):
         self.mode_label.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
         root.add_widget(self.mode_label)
 
-        # Bordered question card -- a plain outlined box around the
-        # question text, matching the reference design, so it reads as
-        # its own distinct panel rather than floating loosely at the top.
         question_card = BoxLayout(padding=dp(14), size_hint=(1, 0.40))
         with question_card.canvas.before:
             Color(0.5, 0.5, 0.5, 1)
@@ -971,18 +898,7 @@ class LPTestApp(App):
         ), 1.0)
         return self.sm
 
-    # -- spoken navigation (accessibility) --------------------------------
     def speak(self, text: str):
-        """Speak `text` aloud via the device's own text-to-speech engine.
-
-        Kivy draws its whole UI itself (OpenGL), bypassing the Android
-        View hierarchy TalkBack reads from -- so a Kivy app is invisible
-        to TalkBack no matter what we do inside Kivy. This is the
-        pragmatic alternative: the app narrates itself. Every screen
-        transition and quiz event speaks what just happened/what's on
-        screen, so a blind user can follow along and act on it without
-        needing to see anything, even though it isn't real TalkBack
-        gesture navigation."""
         if not self.voice_enabled or not text:
             return
         if platform == "android":
@@ -995,18 +911,9 @@ class LPTestApp(App):
             from plyer import tts
             tts.speak(message=text)
         except Exception:
-            pass  # TTS isn't available on this platform/build -- fail silently
+            pass
 
     def voice_guard(self, func):
-        """Wrap a direct single-tap handler so it's a no-op while Voice
-        Guidance is on. Real screen readers require a deliberate
-        double-tap to activate anything specifically so a blind user
-        exploring the screen doesn't accidentally trigger whatever their
-        finger happens to land on first -- this makes every button
-        behave the same way once Voice Guidance is on, activating only
-        through the double-tap-to-activate gesture (see VoiceNavMixin),
-        while leaving plain, ordinary single-tap behavior untouched for
-        sighted users who leave Voice Guidance off."""
         def wrapped(*args, **kwargs):
             if self.voice_enabled:
                 return
@@ -1023,10 +930,6 @@ class LPTestApp(App):
             self.speak("Voice guidance on.")
 
     def open_settings(self):
-        """The gear icon next to Voice Guidance. Lets the speech rate be
-        adjusted -- plyer.tts had no way to do this at all (see
-        _AndroidTTS), so this is only possible now that speak() talks to
-        Android's TextToSpeech directly."""
         content = BoxLayout(orientation="vertical", spacing=dp(16), padding=dp(20))
         content.add_widget(Label(
             text="Voice Guidance Speech Rate", font_size=sp(16), bold=True,
@@ -1066,16 +969,6 @@ class LPTestApp(App):
                     "Drag the slider to change it, or tap Test Voice to hear it.")
 
     def confirm_go_home(self):
-        """The Home icon button. Rather than jumping straight back and
-        silently discarding an in-progress quiz, ask first -- and read
-        the question aloud immediately, since the person tapping this
-        may not be able to see the confirmation dialog that popped up.
-
-        The dialog content is a VoiceNavBoxLayout, not a plain one --
-        without that, swipe/explore/double-tap (and the haptic feedback
-        that goes with them) would silently stop working the moment this
-        popup opened, even though Voice Guidance is still on. That was
-        the bug: gestures worked everywhere except inside this dialog."""
         content = VoiceNavBoxLayout(orientation="vertical", spacing=dp(14), padding=dp(16))
         msg = Label(
             text="Go back to the home screen?\nThis will end your current quiz.",
@@ -1115,10 +1008,6 @@ class LPTestApp(App):
                     "Swipe to choose, then double-tap to confirm.")
 
     def repeat_current(self):
-        """The Speak icon button. Re-reads whatever the current screen is
-        showing -- the same wording that would have been auto-announced
-        when this screen first appeared, so it works as a general-purpose
-        'say that again' the user can reach for any time."""
         screen = self.sm.current
         letters = ["A", "B", "C", "D"]
 
@@ -1155,7 +1044,6 @@ class LPTestApp(App):
         else:
             self.speak("Welcome to LPTest. Tap Upload File to begin.")
 
-    # -- file loading -----------------------------------------------------
     def browse_file(self):
         self.speak("Opening file picker.")
         if platform == "android":
@@ -1165,23 +1053,9 @@ class LPTestApp(App):
             except Exception as e:
                 print(f"LPTest: Android file picker failed to open: {e}")
                 self.speak("Couldn't open the file picker. Trying the backup file browser.")
-                # fall through to the desktop-style picker as a backup
         self._browse_file_desktop()
 
     def _android_pick_file(self):
-        """Open Android's real system document picker directly via
-        pyjnius, instead of going through plyer.filechooser.
-
-        plyer's Android file chooser resolves the picked file by reading
-        the legacy `_data` column off the content:// URI -- but that
-        column is routinely null on modern Android's scoped storage, and
-        not just for cloud-backed files: plain local files (including
-        .txt files picked from the ordinary Files/Downloads app) hit this
-        too, which was the actual bug. The fix is to stop trying to
-        resolve a filesystem path at all: read the picked file's bytes
-        straight from its ContentResolver stream and copy them into our
-        own app-private storage, which we know is always readable
-        regardless of what the source provider does or doesn't expose."""
         from jnius import autoclass
         from android import activity, mActivity
 
@@ -1206,8 +1080,6 @@ class LPTestApp(App):
             Clock.schedule_once(lambda *_: self.speak("No file selected."), 0)
             return
         uri = data.getData()
-        # onActivityResult runs off Kivy's own event loop -- hop back
-        # onto it via Clock before touching any widget or app state.
         Clock.schedule_once(lambda *_: self._android_copy_uri_to_temp(uri), 0)
 
     def _android_copy_uri_to_temp(self, uri):
@@ -1216,10 +1088,6 @@ class LPTestApp(App):
             from android import mActivity
 
             resolver = mActivity.getContentResolver()
-
-            # OpenableColumns.DISPLAY_NAME works across virtually every
-            # content provider (unlike the `_data` column) -- it's the
-            # column SAF itself guarantees providers fill in.
             display_name = "uploaded_file"
             try:
                 OpenableColumns = autoclass("android.provider.OpenableColumns")
@@ -1254,14 +1122,6 @@ class LPTestApp(App):
         self.load_file(dest_path)
 
     def _browse_file_desktop(self):
-        """Kivy's own in-window file browser. Used on desktop, where a
-        real filesystem path is always meaningful. On Android this is
-        NOT used -- Android's scoped storage means an app-drawn file
-        browser starting at a plain filesystem path can't see the
-        user's actual Documents/Downloads at all, which was the original
-        bug report ("can't select a file"). Android instead goes through
-        browse_file()'s plyer/SAF path above, which opens the real
-        system file picker and needs no storage permission."""
         chooser = FileChooserListView(filters=["*" + e for e in SUPPORTED_EXT] + ["*.*"],
                                        path=os.path.expanduser("~"))
         popup_box = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8))
@@ -1296,12 +1156,6 @@ class LPTestApp(App):
         self.speak(message)
 
     def _load_file_now(self, path: str):
-        # Broad guard by design: this runs from a Clock callback with no
-        # console visible on a phone to see a traceback on, so an
-        # unexpected error here (a corrupt file, a permission hiccup, an
-        # edge case in a third-party parsing library) must never be
-        # allowed to propagate and take down the whole app -- it should
-        # surface as a normal, recoverable on-screen/spoken error instead.
         try:
             result = extract_text(path)
             if result.error:
@@ -1338,7 +1192,6 @@ class LPTestApp(App):
                 "Something went wrong reading that file. Please try a different file."
             )
 
-    # -- question-count selection ------------------------------------------
     def offer_count_select(self, questions: list[dict]):
         total = len(questions)
         self._pending_pool = questions
@@ -1361,7 +1214,6 @@ class LPTestApp(App):
         random.shuffle(pool)
         self.start_quiz(pool[:count])
 
-    # -- quiz flow -----------------------------------------------------
     def start_quiz(self, questions: list[dict]):
         self.questions = questions
         self.user_answers = [None] * len(questions)
@@ -1414,7 +1266,6 @@ class LPTestApp(App):
         self.current_index += 1
         self.render_question()
 
-    # -- summary -----------------------------------------------------
     def show_summary(self, record: bool = True):
         total = len(self.questions)
         correct = sum(1 for i, q in enumerate(self.questions)
@@ -1452,7 +1303,6 @@ class LPTestApp(App):
         self.sm.current = "landing"
         self.speak("Back to the home screen. Tap Upload File to begin.")
 
-    # -- history actions -----------------------------------------------------
     def retake_entry(self, entry: dict):
         self.mode_note = entry.get("mode_note", "")
         self.current_quiz_filename = entry.get("filename")
