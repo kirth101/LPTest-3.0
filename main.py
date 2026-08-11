@@ -52,6 +52,7 @@ from kivy.uix.popup import Popup
 from kivy.uix.screenmanager import Screen, ScreenManager, NoTransition
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.widget import Widget
+from kivy.uix.slider import Slider
 from kivy.utils import platform
 
 from file_parser import extract_text
@@ -64,17 +65,22 @@ from question_generator import (
 import quiz_history
 
 # ---------------------------------------------------------------------------
-# Palette — same design as the desktop app (black bg, orange accents)
+# Palette — purple/violet theme
 # ---------------------------------------------------------------------------
 BG = (0.043, 0.043, 0.043, 1)
-PANEL_BG = (0.078, 0.078, 0.078, 1)
-ORANGE = (0.886, 0.400, 0.102, 1)
-ORANGE_DARK = (0.478, 0.208, 0.063, 1)
-ORANGE_LIGHT = (1.0, 0.541, 0.239, 1)
+PANEL_BG = (0.086, 0.078, 0.129, 1)
+PURPLE = (0.482, 0.235, 0.898, 1)          # primary accent -- buttons, icons
+PURPLE_DARK = (0.322, 0.145, 0.671, 1)     # option button fill
+PURPLE_LIGHT = (0.702, 0.549, 0.988, 1)    # headings / title text
+BLUE_ACCENT = (0.376, 0.522, 0.984, 1)     # "Question X of Y" label
+PINK_ACCENT = (0.902, 0.345, 0.596, 1)     # "Your Previous Quizzes" heading
 FG = (0.961, 0.961, 0.961, 1)
 GREEN = (0.184, 0.682, 0.306, 1)
 RED = (0.851, 0.263, 0.184, 1)
 MUTED = (0.659, 0.659, 0.659, 1)
+
+# Change this to however you'd like to be credited on the home screen.
+DEVELOPER_NAME = "Direk Allan"
 
 SUPPORTED_EXT = [".pdf", ".docx", ".doc", ".txt"]
 PRESET_COUNTS = (10, 20, 50, 100)
@@ -133,7 +139,7 @@ class _RoundIconButton(ButtonBehavior, Widget):
     rendering as an empty tofu box on-device instead of an actual icon.
     Vector lines always render correctly, on every device, regardless of
     font support."""
-    bg_color = ListProperty(ORANGE)
+    bg_color = ListProperty(PURPLE)
 
     def __init__(self, **kwargs):
         kwargs.setdefault("size_hint", (None, None))
@@ -206,8 +212,39 @@ class SpeakIconButton(_RoundIconButton):
         self._wave2.circle = (cx + s * 0.15, cy, s * 0.95, -45, 45)
 
 
+class GearIconButton(ButtonBehavior, Widget):
+    """Plain gear/settings icon -- deliberately without a filled circle
+    background (unlike Home/Speak), matching the understated gray gear
+    that sits next to the Voice Guidance toggle in the reference design."""
+    def __init__(self, **kwargs):
+        kwargs.setdefault("size_hint", (None, None))
+        kwargs.setdefault("size", (dp(36), dp(36)))
+        super().__init__(**kwargs)
+        with self.canvas.after:
+            Color(0.75, 0.75, 0.78, 1)
+            self._ring = Line(width=dp(1.6))
+            self._hub = Line(width=dp(1.4))
+            self._teeth = [Line(width=dp(1.6), cap="round") for _ in range(8)]
+        self.bind(pos=self._redraw, size=self._redraw)
+        self._redraw()
+
+    def _redraw(self, *_a):
+        import math
+        cx, cy = self.center_x, self.center_y
+        r = min(self.width, self.height) * 0.24
+        self._ring.circle = (cx, cy, r)
+        self._hub.circle = (cx, cy, r * 0.4)
+        for i, line in enumerate(self._teeth):
+            angle = math.radians(i * 45)
+            x1 = cx + math.cos(angle) * r * 1.15
+            y1 = cy + math.sin(angle) * r * 1.15
+            x2 = cx + math.cos(angle) * r * 1.55
+            y2 = cy + math.sin(angle) * r * 1.55
+            line.points = [x1, y1, x2, y2]
+
+
 class OptionButton(ButtonBehavior, Label):
-    bg_color = ListProperty(ORANGE_DARK)
+    bg_color = ListProperty(PURPLE_DARK)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -241,6 +278,57 @@ def option_font_size(options: list[str]) -> int:
     elif longest <= 90 and total <= 320:
         return 15
     return 14
+
+
+class _AndroidTTS:
+    """Direct Android TextToSpeech wrapper (bypassing plyer.tts).
+
+    plyer.tts recreates a brand-new TextToSpeech engine from scratch on
+    every single call and polls in a sleep loop waiting for it to become
+    ready -- slow, and it exposes no way to set a speech rate at all.
+    This keeps one engine alive for the whole app (fast, immediate) and
+    supports setSpeechRate() for the Settings screen."""
+    _engine = None
+
+    @classmethod
+    def _get_engine(cls):
+        if cls._engine is None:
+            from jnius import autoclass
+            TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
+            Locale = autoclass("java.util.Locale")
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            cls._engine = TextToSpeech(PythonActivity.mActivity, None)
+            cls._engine.setLanguage(Locale.US)
+        return cls._engine
+
+    @classmethod
+    def speak(cls, message: str, rate: float = 1.0):
+        from jnius import autoclass
+        TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
+        engine = cls._get_engine()
+        engine.setSpeechRate(max(0.1, rate))
+        engine.speak(message, TextToSpeech.QUEUE_FLUSH, None)
+
+
+def _android_vibrate(seconds: float):
+    """Direct Android Vibrator wrapper (bypassing plyer.vibrator), used
+    for the haptic pulses on every focus change/activation. Kept as a
+    plain function (not tied to any particular engine instance) since,
+    unlike TTS, there's no setup cost worth caching here."""
+    from jnius import autoclass, cast
+    Context = autoclass("android.content.Context")
+    PythonActivity = autoclass("org.kivy.android.PythonActivity")
+    Build_VERSION = autoclass("android.os.Build$VERSION")
+    service = PythonActivity.mActivity.getSystemService(Context.VIBRATOR_SERVICE)
+    vibrator = cast("android.os.Vibrator", service)
+    if vibrator is None:
+        return
+    ms = max(1, int(seconds * 1000))
+    if Build_VERSION.SDK_INT >= 26:
+        VibrationEffect = autoclass("android.os.VibrationEffect")
+        vibrator.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+    else:
+        vibrator.vibrate(ms)
 
 
 def guarded_release(action):
@@ -331,12 +419,17 @@ class VoiceNavMixin:
     def _haptic(self, short: bool = True):
         """A quick vibration pulse -- 15ms for a focus move, 35ms for an
         activation -- so exploring/swiping feels immediate and alive
-        instead of silent or laggy."""
+        instead of silent or laggy. Goes straight through Android's own
+        Vibrator API (see _android_vibrate) rather than plyer.vibrator,
+        which had the same "recreate everything, hope it works" fragility
+        as plyer.tts did -- this is easier to reason about and to debug
+        if a pulse ever silently fails to fire."""
+        if platform != "android":
+            return
         try:
-            from plyer import vibrator
-            vibrator.vibrate(0.015 if short else 0.035)
-        except Exception:
-            pass  # no vibration motor / not supported on this platform -- fine
+            _android_vibrate(0.015 if short else 0.035)
+        except Exception as e:
+            print(f"LPTest: haptic feedback failed: {e}")
 
     def _voice_nav_focus(self, index: int, *, haptic: bool = True):
         if not self._voice_nav_items or index == self._voice_nav_index:
@@ -455,37 +548,56 @@ class LandingScreen(VoiceNavMixin, Screen):
         root = BoxLayout(orientation="vertical", padding=dp(24), spacing=dp(12))
         self.add_widget(root)
 
-        header = BoxLayout(size_hint_y=None, height=dp(44))
-        header.add_widget(Label(
-            text="Welcome to LPTest", font_size=sp(26), bold=True,
-            color=ORANGE_LIGHT, halign="left", valign="middle"
-        ))
-        header.children[-1].bind(size=lambda w, *_: setattr(w, "text_size", w.size))
+        header = BoxLayout(size_hint_y=None, height=dp(50))
+        title_box = BoxLayout(orientation="vertical")
+        title = Label(text="Welcome to LPTest", font_size=sp(24), bold=True,
+                      color=PURPLE_LIGHT, halign="left", valign="bottom")
+        title.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
+        subtitle = Label(text=f"Developed by {DEVELOPER_NAME}", font_size=sp(13),
+                          color=PURPLE_LIGHT, halign="left", valign="top")
+        subtitle.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
+        title_box.add_widget(title)
+        title_box.add_widget(subtitle)
+        header.add_widget(title_box)
         _bar, _home, self._speak_btn = build_icon_bar(show_home=False)
         header.add_widget(_bar)
         root.add_widget(header)
 
-        root.add_widget(Label(
-            text="Upload a study file (PDF, Word, or text) to generate a quiz from it.",
-            font_size=sp(14), color=MUTED, size_hint_y=None, height=dp(48)
-        ))
+        instructions = Label(
+            text="Upload a file to start the quiz\nYou can turn On/Off the voice assistant below",
+            font_size=sp(14), color=FG, size_hint_y=None, height=dp(56), halign="center"
+        )
+        instructions.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
+        root.add_widget(instructions)
 
-        self.upload_btn = PanelButton(text="Upload File", bg_color=ORANGE, height=dp(56),
-                                       font_size=sp(16))
-        self.upload_btn.bind(on_release=guarded_release(lambda app: app.browse_file()))
+        self.upload_btn = PanelButton(text="Upload a file", bg_color=PURPLE, height=dp(56),
+                                       font_size=sp(17))
+        # Direct single-tap, deliberately NOT gated behind Voice Guidance
+        # (see App.voice_guard) -- this is the home screen, and a sighted
+        # user (or someone helping a blind user) needs a simple, ordinary
+        # tap here at all times, most importantly to switch Voice
+        # Guidance off again without first having to learn the
+        # swipe/double-tap gestures. It's still also reachable via
+        # explore+double-tap below, for a blind user starting the app.
+        self.upload_btn.bind(on_release=lambda *_: App.get_running_app().browse_file())
         root.add_widget(self.upload_btn)
 
-        self.voice_btn = PanelButton(text="Voice Guidance: On", bg_color=PANEL_BG,
-                                      height=dp(48), font_size=sp(13))
-        self.voice_btn.bind(on_release=guarded_release(lambda app: app.toggle_voice()))
-        root.add_widget(self.voice_btn)
+        toggle_row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(10))
+        self.voice_btn = PanelButton(text="Voice Guidance On", bg_color=PANEL_BG,
+                                      font_size=sp(14))
+        self.voice_btn.bind(on_release=lambda *_: App.get_running_app().toggle_voice())
+        toggle_row.add_widget(self.voice_btn)
+        self.gear_btn = GearIconButton()
+        self.gear_btn.bind(on_release=lambda *_: App.get_running_app().open_settings())
+        toggle_row.add_widget(self.gear_btn)
+        root.add_widget(toggle_row)
 
         self.status_label = Label(text="", font_size=sp(13), color=MUTED,
                                    size_hint_y=None, height=dp(40))
         root.add_widget(self.status_label)
 
         root.add_widget(Label(text="Your Previous Quizzes", font_size=sp(16), bold=True,
-                               color=ORANGE_LIGHT, size_hint_y=None, height=dp(36),
+                               color=PINK_ACCENT, size_hint_y=None, height=dp(36),
                                halign="left", valign="middle"))
 
         self.history_list = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(8))
@@ -495,12 +607,15 @@ class LandingScreen(VoiceNavMixin, Screen):
         root.add_widget(scroller)
 
         # Swipe/explore-reachable from the moment the app opens -- this is
-        # the screen a blind user lands on first, so "Upload File" has to
-        # be reachable here by touch, not just once already inside a quiz.
+        # the screen a blind user lands on first, so "Upload a file" has
+        # to be reachable here by touch, not just once already inside a
+        # quiz. Direct tap ALSO works on every one of these (see above),
+        # so this is a second, parallel way to reach the same actions.
         app = App.get_running_app
         self._set_voice_nav_items([
-            ("Upload File button", lambda: app().browse_file(), self.upload_btn),
+            ("Upload a file button", lambda: app().browse_file(), self.upload_btn),
             ("Voice Guidance toggle button", lambda: app().toggle_voice(), self.voice_btn),
+            ("Settings button", lambda: app().open_settings(), self.gear_btn),
             ("Speak button, repeats the welcome message", lambda: app().repeat_current(), self._speak_btn),
         ])
 
@@ -511,8 +626,9 @@ class LandingScreen(VoiceNavMixin, Screen):
         self.history_list.clear_widgets()
         history = list(reversed(quiz_history.load_history()))
         base_items = [
-            ("Upload File button", lambda: App.get_running_app().browse_file(), self.upload_btn),
+            ("Upload a file button", lambda: App.get_running_app().browse_file(), self.upload_btn),
             ("Voice Guidance toggle button", lambda: App.get_running_app().toggle_voice(), self.voice_btn),
+            ("Settings button", lambda: App.get_running_app().open_settings(), self.gear_btn),
             ("Speak button, repeats the welcome message",
              lambda: App.get_running_app().repeat_current(), self._speak_btn),
         ]
@@ -537,7 +653,7 @@ class LandingScreen(VoiceNavMixin, Screen):
                 text_size=(dp(160), None)
             ))
             row.add_widget(info)
-            retake_btn = PanelButton(text="Retake", bg_color=ORANGE, size_hint=(None, None),
+            retake_btn = PanelButton(text="Retake", bg_color=PURPLE, size_hint=(None, None),
                                       width=dp(90), height=dp(40), font_size=sp(12))
             retake_btn.bind(on_release=guarded_release(lambda app, e=entry: app.retake_entry(e)))
             review_btn = PanelButton(text="Review", bg_color=PANEL_BG, size_hint=(None, None),
@@ -564,7 +680,7 @@ class CountSelectScreen(VoiceNavMixin, Screen):
 
         header = BoxLayout(size_hint_y=None, height=dp(44))
         title = Label(text="How many questions?", font_size=sp(24), bold=True,
-                      color=ORANGE_LIGHT, halign="left", valign="middle")
+                      color=PURPLE_LIGHT, halign="left", valign="middle")
         title.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
         header.add_widget(title)
         _bar, self._home_btn, self._speak_btn = build_icon_bar()
@@ -585,7 +701,7 @@ class CountSelectScreen(VoiceNavMixin, Screen):
         app = App.get_running_app()
         nav_items = []
         for label, n in choices:
-            btn = PanelButton(text=label, bg_color=ORANGE_DARK, height=dp(52), font_size=sp(15))
+            btn = PanelButton(text=label, bg_color=PURPLE_DARK, height=dp(52), font_size=sp(15))
             btn.bind(on_release=guarded_release(lambda app, count=n: app.start_quiz_with_count(count)))
             self.btns_box.add_widget(btn)
             nav_items.append((f"{label} button", (lambda count=n: app.start_quiz_with_count(count)), btn))
@@ -606,7 +722,7 @@ class QuizScreen(VoiceNavMixin, Screen):
         self.add_widget(root)
 
         header = BoxLayout(size_hint_y=None, height=dp(32))
-        self.progress_label = Label(text="", font_size=sp(15), bold=True, color=ORANGE_LIGHT,
+        self.progress_label = Label(text="", font_size=sp(15), bold=True, color=BLUE_ACCENT,
                                      halign="left", valign="middle")
         self.progress_label.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
         header.add_widget(self.progress_label)
@@ -654,7 +770,7 @@ class QuizScreen(VoiceNavMixin, Screen):
             texture_size=lambda w, *_: setattr(w, "height", w.texture_size[1] + dp(4)))
         root.add_widget(self.explanation_label)
 
-        self.next_btn = PanelButton(text="Next Question", bg_color=ORANGE, height=dp(52),
+        self.next_btn = PanelButton(text="Next Question", bg_color=PURPLE, height=dp(52),
                                      font_size=sp(15), disabled=True)
         self.next_btn.bind(on_release=guarded_release(lambda app: app.next_question()))
         root.add_widget(self.next_btn)
@@ -688,9 +804,9 @@ class QuizScreen(VoiceNavMixin, Screen):
                     btn.text = f"{label}  (Your answer)"
                     btn.bg_color = RED
                 else:
-                    btn.bg_color = ORANGE_DARK
+                    btn.bg_color = PURPLE_DARK
             else:
-                btn.bg_color = ORANGE_DARK
+                btn.bg_color = PURPLE_DARK
                 btn.bind(on_release=guarded_release(lambda app, idx=i: app.select_option(idx)))
             self.options_box.add_widget(btn)
             self.option_widgets.append(btn)
@@ -708,11 +824,6 @@ class QuizScreen(VoiceNavMixin, Screen):
                 self.status_label.color = RED
             if q.get("explanation"):
                 self.explanation_label.text = f"Why: {q['explanation']}"
-            elif q.get("sourceChunk"):
-                snippet = q["sourceChunk"]
-                if len(snippet) > 220:
-                    snippet = snippet[:220].rsplit(" ", 1)[0] + "\u2026"
-                self.explanation_label.text = f"From your file: \u201c{snippet}\u201d"
             else:
                 self.explanation_label.text = ""
             self.next_btn.disabled = False
@@ -751,7 +862,7 @@ class SummaryScreen(VoiceNavMixin, Screen):
 
         header = BoxLayout(size_hint_y=None, height=dp(40))
         self.heading = Label(text="Quiz Complete!", font_size=sp(24), bold=True,
-                              color=ORANGE_LIGHT, halign="left", valign="middle")
+                              color=PURPLE_LIGHT, halign="left", valign="middle")
         self.heading.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
         header.add_widget(self.heading)
         _bar, self._home_btn, self._speak_btn = build_icon_bar()
@@ -769,7 +880,7 @@ class SummaryScreen(VoiceNavMixin, Screen):
         root.add_widget(scroller)
 
         actions = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8))
-        self.retry_btn = PanelButton(text="Retry Incorrect", bg_color=ORANGE, font_size=sp(13))
+        self.retry_btn = PanelButton(text="Retry Incorrect", bg_color=PURPLE, font_size=sp(13))
         self.retry_btn.bind(on_release=guarded_release(lambda app: app.retry_incorrect()))
         self.new_btn = PanelButton(text="Upload New File", bg_color=PANEL_BG, font_size=sp(13))
         self.new_btn.bind(on_release=guarded_release(lambda app: app.reset_to_landing()))
@@ -838,6 +949,7 @@ class LPTestApp(App):
         self._pending_pool: list[dict] = []
         self.locked = False
         self.voice_enabled = True
+        self.speech_rate = 1.0
         self._count_select_prompt = ""
 
         try:
@@ -873,6 +985,12 @@ class LPTestApp(App):
         gesture navigation."""
         if not self.voice_enabled or not text:
             return
+        if platform == "android":
+            try:
+                _AndroidTTS.speak(text, rate=self.speech_rate)
+                return
+            except Exception as e:
+                print(f"LPTest: Android TTS failed, falling back to plyer: {e}")
         try:
             from plyer import tts
             tts.speak(message=text)
@@ -898,11 +1016,54 @@ class LPTestApp(App):
     def toggle_voice(self):
         self.voice_enabled = not self.voice_enabled
         self.landing.voice_btn.text = (
-            "Voice Guidance: On" if self.voice_enabled
-            else "Voice Guidance: Off"
+            "Voice Guidance On" if self.voice_enabled
+            else "Voice Guidance Off"
         )
         if self.voice_enabled:
             self.speak("Voice guidance on.")
+
+    def open_settings(self):
+        """The gear icon next to Voice Guidance. Lets the speech rate be
+        adjusted -- plyer.tts had no way to do this at all (see
+        _AndroidTTS), so this is only possible now that speak() talks to
+        Android's TextToSpeech directly."""
+        content = BoxLayout(orientation="vertical", spacing=dp(16), padding=dp(20))
+        content.add_widget(Label(
+            text="Voice Guidance Speech Rate", font_size=sp(16), bold=True,
+            color=FG, size_hint_y=None, height=dp(28)
+        ))
+        rate_label = Label(text=f"{self.speech_rate:.1f}x", font_size=sp(22), bold=True,
+                            color=PURPLE_LIGHT, size_hint_y=None, height=dp(40))
+        content.add_widget(rate_label)
+
+        slider = Slider(min=0.5, max=2.0, value=self.speech_rate, step=0.1,
+                         size_hint_y=None, height=dp(40))
+
+        def on_change(_slider, value):
+            self.speech_rate = round(value, 1)
+            rate_label.text = f"{self.speech_rate:.1f}x"
+
+        slider.bind(value=on_change)
+        content.add_widget(slider)
+
+        speed_row = BoxLayout(size_hint_y=None, height=dp(20), spacing=dp(8))
+        speed_row.add_widget(Label(text="Slower", font_size=sp(11), color=MUTED))
+        speed_row.add_widget(Label(text="Faster", font_size=sp(11), color=MUTED))
+        content.add_widget(speed_row)
+
+        test_btn = PanelButton(text="Test Voice", bg_color=PURPLE, font_size=sp(14), height=dp(48))
+        test_btn.bind(on_release=lambda *_: self.speak(
+            "This is a test of the voice guidance speech rate."))
+        content.add_widget(test_btn)
+
+        popup = Popup(title="Settings", content=content, size_hint=(0.85, 0.55))
+        close_btn = PanelButton(text="Close", bg_color=PANEL_BG, font_size=sp(14), height=dp(48))
+        close_btn.bind(on_release=lambda *_: popup.dismiss())
+        content.add_widget(close_btn)
+
+        popup.open()
+        self.speak(f"Settings. Speech rate is {self.speech_rate:.1f} times normal speed. "
+                    "Drag the slider to change it, or tap Test Voice to hear it.")
 
     def confirm_go_home(self):
         """The Home icon button. Rather than jumping straight back and
@@ -938,7 +1099,7 @@ class LPTestApp(App):
 
         stay_btn = PanelButton(text="No, stay here", bg_color=PANEL_BG, font_size=sp(14))
         stay_btn.bind(on_release=guarded_release(lambda app: do_stay()))
-        leave_btn = PanelButton(text="Yes, go home", bg_color=ORANGE, font_size=sp(14))
+        leave_btn = PanelButton(text="Yes, go home", bg_color=PURPLE, font_size=sp(14))
         leave_btn.bind(on_release=guarded_release(lambda app: do_leave()))
         btn_row.add_widget(stay_btn)
         btn_row.add_widget(leave_btn)
