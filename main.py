@@ -40,9 +40,14 @@ from question_generator import (
 import quiz_history
 
 # ---------------------------------------------------------------------------
-# Swipe Sound Effect Setup
+# BUG 4 FIX: Safe Absolute Path Resolution para sa swipe.wav
 # ---------------------------------------------------------------------------
-SWIPE_SOUND = SoundLoader.load('swipe.wav')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SWIPE_PATH = os.path.join(BASE_DIR, 'swipe.wav')
+if not os.path.exists(SWIPE_PATH):
+    SWIPE_PATH = os.path.join(BASE_DIR, 'audio', 'swipe.wav')
+
+SWIPE_SOUND = SoundLoader.load(SWIPE_PATH) if os.path.exists(SWIPE_PATH) else SoundLoader.load('swipe.wav')
 
 def play_swipe_sound():
     if SWIPE_SOUND:
@@ -248,19 +253,25 @@ def option_font_size(options: list[str]) -> int:
     return 14
 
 
+# ---------------------------------------------------------------------------
+# BUG 5 FIX: Dynamic Native TTS Engines & Voices Selection
+# ---------------------------------------------------------------------------
 class _AndroidTTS:
     _engine = None
     _selected_voice = None
 
     @classmethod
     def _get_engine(cls):
-        if cls._engine is None:
-            from jnius import autoclass
-            TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
-            Locale = autoclass("java.util.Locale")
-            PythonActivity = autoclass("org.kivy.android.PythonActivity")
-            cls._engine = TextToSpeech(PythonActivity.mActivity, None)
-            cls._engine.setLanguage(Locale.US)
+        if cls._engine is None and platform == "android":
+            try:
+                from jnius import autoclass
+                TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
+                Locale = autoclass("java.util.Locale")
+                PythonActivity = autoclass("org.kivy.android.PythonActivity")
+                cls._engine = TextToSpeech(PythonActivity.mActivity, None)
+                cls._engine.setLanguage(Locale.US)
+            except Exception as e:
+                print(f"LPTest TTS Init Error: {e}")
         return cls._engine
 
     @classmethod
@@ -269,6 +280,8 @@ class _AndroidTTS:
             return []
         try:
             engine = cls._get_engine()
+            if not engine:
+                return []
             from jnius import autoclass
             Build_VERSION = autoclass("android.os.Build$VERSION")
             if Build_VERSION.SDK_INT >= 21:
@@ -293,28 +306,41 @@ class _AndroidTTS:
 
     @classmethod
     def speak(cls, message: str, rate: float = 1.0):
-        from jnius import autoclass
-        TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
-        engine = cls._get_engine()
-        engine.setSpeechRate(max(0.1, rate))
-        engine.speak(message, TextToSpeech.QUEUE_FLUSH, None)
+        if platform == "android":
+            try:
+                from jnius import autoclass
+                TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
+                engine = cls._get_engine()
+                if engine:
+                    engine.setSpeechRate(max(0.1, rate))
+                    engine.speak(message, TextToSpeech.QUEUE_FLUSH, None)
+            except Exception as e:
+                print(f"LPTest TTS Speak Error: {e}")
 
 
+# ---------------------------------------------------------------------------
+# BUG 3 FIX: Safe Android Haptic Vibration Feedback
+# ---------------------------------------------------------------------------
 def _android_vibrate(seconds: float):
-    from jnius import autoclass, cast
-    Context = autoclass("android.content.Context")
-    PythonActivity = autoclass("org.kivy.android.PythonActivity")
-    Build_VERSION = autoclass("android.os.Build$VERSION")
-    service = PythonActivity.mActivity.getSystemService(Context.VIBRATOR_SERVICE)
-    vibrator = cast("android.os.Vibrator", service)
-    if vibrator is None:
+    if platform != "android":
         return
-    ms = max(1, int(seconds * 1000))
-    if Build_VERSION.SDK_INT >= 26:
-        VibrationEffect = autoclass("android.os.VibrationEffect")
-        vibrator.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
-    else:
-        vibrator.vibrate(ms)
+    try:
+        from jnius import autoclass, cast
+        Context = autoclass("android.content.Context")
+        PythonActivity = autoclass("org.kivy.android.PythonActivity")
+        Build_VERSION = autoclass("android.os.Build$VERSION")
+        service = PythonActivity.mActivity.getSystemService(Context.VIBRATOR_SERVICE)
+        vibrator = cast("android.os.Vibrator", service)
+        if vibrator is None:
+            return
+        ms = max(1, int(seconds * 1000))
+        if Build_VERSION.SDK_INT >= 26:
+            VibrationEffect = autoclass("android.os.VibrationEffect")
+            vibrator.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+        else:
+            vibrator.vibrate(ms)
+    except Exception as e:
+        print(f"LPTest Vibration Error: {e}")
 
 
 def guarded_release(action):
@@ -339,6 +365,9 @@ def build_icon_bar(show_home: bool = True):
     return bar, home_btn, speak_btn
 
 
+# ---------------------------------------------------------------------------
+# BUG 1 & 2 FIX: Voice Nav Mixin with Touch Intercept & Scroll Lock
+# ---------------------------------------------------------------------------
 class VoiceNavMixin:
     _SWIPE_THRESHOLD = dp(28)
     _DOUBLE_TAP_WINDOW = 0.3
@@ -364,12 +393,7 @@ class VoiceNavMixin:
 
     def _haptic(self, short: bool = True):
         play_swipe_sound()
-        if platform != "android":
-            return
-        try:
-            _android_vibrate(0.02 if short else 0.05)
-        except Exception as e:
-            print(f"LPTest: haptic feedback failed: {e}")
+        _android_vibrate(0.02 if short else 0.05)
 
     def _voice_nav_focus(self, index: int, *, haptic: bool = True):
         if not self._voice_nav_items or index == self._voice_nav_index:
@@ -423,8 +447,7 @@ class VoiceNavMixin:
             hit = self._voice_nav_hit_test(touch.pos)
             if hit is not None:
                 self._voice_nav_focus(hit)
-            # Pigilan ang pag-scroll habang nag-s-swipe
-            return True
+            return True # Pigilan ang pag-scroll habang nagse-swipe
         return super().on_touch_move(touch)
 
     def on_touch_up(self, touch):
@@ -651,8 +674,7 @@ class CountSelectScreen(VoiceNavMixin, Screen):
             self.btns_box.add_widget(btn)
             nav_items.append((f"{label} button", (lambda count=n: app.start_quiz_with_count(count)), btn))
         nav_items.append(("Home button", lambda: app.confirm_go_home(), self._home_btn))
-        nav_items.append(("Speak button, repeats the question count options",
-                           lambda: app.repeat_current(), self._speak_btn))
+        nav_items.append(("Speak button, repeats options", lambda: app.repeat_current(), self._speak_btn))
         self._set_voice_nav_items(nav_items)
 
 
@@ -708,8 +730,7 @@ class QuizScreen(VoiceNavMixin, Screen):
         self.explanation_label = Label(text="", font_size=sp(12), color=MUTED,
                                         size_hint_y=None, height=dp(0), halign="left", valign="top")
         self.explanation_label.bind(width=lambda w, *_: setattr(w, "text_size", (w.width, None)))
-        self.explanation_label.bind(
-            texture_size=lambda w, *_: setattr(w, "height", w.texture_size[1] + dp(4)))
+        self.explanation_label.bind(texture_size=lambda w, *_: setattr(w, "height", w.texture_size[1] + dp(4)))
         root.add_widget(self.explanation_label)
 
         self.next_btn = PanelButton(text="Next Question", bg_color=PURPLE, height=dp(52),
@@ -722,8 +743,7 @@ class QuizScreen(VoiceNavMixin, Screen):
     def _redraw_question_border(self, widget, *_a):
         self._question_border.rectangle = (widget.x, widget.y, widget.width, widget.height)
 
-    def render(self, q: dict, index: int, total: int, mode_note: str, locked: bool,
-               chosen: int | None):
+    def render(self, q: dict, index: int, total: int, mode_note: str, locked: bool, chosen: int | None):
         letters = ["a.", "b.", "c.", "d."]
         spoken_letters = ["A", "B", "C", "D"]
         self.progress_label.text = f"Question {index + 1} of {total}"
@@ -760,9 +780,7 @@ class QuizScreen(VoiceNavMixin, Screen):
                 self.status_label.color = GREEN
             else:
                 correct_text = q["options"][correct_idx] if correct_idx is not None else "unknown"
-                self.status_label.text = (
-                    f"Not quite \u2014 the correct answer is {letters[correct_idx]} {correct_text}"
-                )
+                self.status_label.text = f"Not quite \u2014 the correct answer is {letters[correct_idx]} {correct_text}"
                 self.status_label.color = RED
             if q.get("explanation"):
                 self.explanation_label.text = f"Why: {q['explanation']}"
@@ -781,14 +799,13 @@ class QuizScreen(VoiceNavMixin, Screen):
             nav_items = [
                 (f"Option {spoken_letters[i]}: {q['options'][i] if i < len(q['options']) else ''}",
                  (lambda idx=i: app.select_option(idx)), self.option_widgets[i])
-                for i in range(4)
+                for i in range(len(self.option_widgets))
             ]
         else:
             next_label = "Finish Quiz button" if index == total - 1 else "Next Question button"
             nav_items = [(next_label, lambda: app.next_question(), self.next_btn)]
         nav_items.append(("Home button", lambda: app.confirm_go_home(), self._home_btn))
-        nav_items.append(("Speak button, repeats the current question",
-                           lambda: app.repeat_current(), self._speak_btn))
+        nav_items.append(("Speak button, repeats current question", lambda: app.repeat_current(), self._speak_btn))
         self._set_voice_nav_items(nav_items)
 
 
@@ -811,546 +828,465 @@ class SummaryScreen(VoiceNavMixin, Screen):
         header.add_widget(_bar)
         root.add_widget(header)
 
-        self.score_label = Label(text="", font_size=sp(16), color=FG, size_hint_y=None,
-                                  height=dp(32))
+        self.score_label = Label(text="", font_size=sp(32), bold=True, color=GREEN,
+                                 size_hint_y=None, height=dp(60), halign="center")
         root.add_widget(self.score_label)
 
-        self.list_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(10))
-        self.list_box.bind(minimum_height=self.list_box.setter("height"))
-        scroller = ScrollView(size_hint=(1, 1))
-        scroller.add_widget(self.list_box)
-        root.add_widget(scroller)
+        self.message_label = Label(text="", font_size=sp(16), color=FG,
+                                   size_hint_y=None, height=dp(40), halign="center")
+        root.add_widget(self.message_label)
 
-        actions = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8))
-        self.retry_btn = PanelButton(text="Retry Incorrect", bg_color=PURPLE, font_size=sp(13))
-        self.retry_btn.bind(on_release=guarded_release(lambda app: app.retry_incorrect()))
-        self.new_btn = PanelButton(text="Upload New File", bg_color=PANEL_BG, font_size=sp(13))
-        self.new_btn.bind(on_release=guarded_release(lambda app: app.reset_to_landing()))
-        actions.add_widget(self.retry_btn)
-        actions.add_widget(self.new_btn)
-        root.add_widget(actions)
+        root.add_widget(Widget())
 
-    def render(self, questions: list[dict], user_answers: list, correct: int, total: int):
-        self.score_label.text = f"Score: {correct} / {total} correct"
-        self.list_box.clear_widgets()
-        letters = ["a.", "b.", "c.", "d."]
-        for i, q in enumerate(questions):
-            given = user_answers[i]
-            correct_idx = q.get("correctIndex")
-            row_correct = given == correct_idx
-            row = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(2),
-                             padding=(dp(10), dp(8)))
-            head = Label(text=f"{i + 1}. {q['question']}", bold=True, color=FG,
-                         font_size=sp(13), halign="left", valign="top", size_hint_y=None)
-            head.bind(width=lambda w, *_: setattr(w, "text_size", (w.width, None)))
-            head.bind(texture_size=lambda w, *_: setattr(w, "height", w.texture_size[1]))
-            row.add_widget(head)
+        self.review_btn = PanelButton(text="Review Answers", bg_color=PANEL_BG, height=dp(52), font_size=sp(15))
+        self.review_btn.bind(on_release=guarded_release(lambda app: app.start_review()))
+        root.add_widget(self.review_btn)
 
-            given_text = (f"{letters[given]} {q['options'][given]}" if given is not None
-                          else "No answer")
-            your = Label(text=f"Your answer: {given_text}",
-                         color=GREEN if row_correct else RED, font_size=sp(12),
-                         halign="left", valign="top", size_hint_y=None)
-            your.bind(width=lambda w, *_: setattr(w, "text_size", (w.width, None)))
-            your.bind(texture_size=lambda w, *_: setattr(w, "height", w.texture_size[1]))
-            row.add_widget(your)
+        self.retake_btn = PanelButton(text="Retake Quiz", bg_color=PURPLE_DARK, height=dp(52), font_size=sp(15))
+        self.retake_btn.bind(on_release=guarded_release(lambda app: app.retake_current_quiz()))
+        root.add_widget(self.retake_btn)
 
-            if not row_correct and correct_idx is not None:
-                correct_text = f"{letters[correct_idx]} {q['options'][correct_idx]}"
-                corr = Label(text=f"Correct answer: {correct_text}", color=MUTED,
-                             font_size=sp(12), halign="left", valign="top", size_hint_y=None)
-                corr.bind(width=lambda w, *_: setattr(w, "text_size", (w.width, None)))
-                corr.bind(texture_size=lambda w, *_: setattr(w, "height", w.texture_size[1]))
-                row.add_widget(corr)
+        self.home_btn_large = PanelButton(text="Back to Home", bg_color=PURPLE, height=dp(52), font_size=sp(15))
+        self.home_btn_large.bind(on_release=guarded_release(lambda app: app.confirm_go_home()))
+        root.add_widget(self.home_btn_large)
 
-            row.height = sum(c.height for c in row.children) + dp(16)
-            self.list_box.add_widget(row)
+    def render(self, score: int, total: int):
+        pct = int((score / total) * 100) if total > 0 else 0
+        self.score_label.text = f"{score} / {total} ({pct}%)"
+        if pct >= 80:
+            self.message_label.text = "Outstanding Performance!"
+            self.score_label.color = GREEN
+        elif pct >= 50:
+            self.message_label.text = "Good job! Keep practicing."
+            self.score_label.color = BLUE_ACCENT
+        else:
+            self.message_label.text = "Don't give up! Try again."
+            self.score_label.color = RED
 
         app = App.get_running_app()
-        self._set_voice_nav_items([
-            ("Retry Incorrect button", lambda: app.retry_incorrect(), self.retry_btn),
-            ("Upload New File button", lambda: app.reset_to_landing(), self.new_btn),
+        nav_items = [
+            (f"Score: {score} out of {total}, {pct} percent.", None, self.score_label),
+            ("Review Answers button", lambda: app.start_review(), self.review_btn),
+            ("Retake Quiz button", lambda: app.retake_current_quiz(), self.retake_btn),
+            ("Back to Home button", lambda: app.confirm_go_home(), self.home_btn_large),
             ("Home button", lambda: app.confirm_go_home(), self._home_btn),
-            ("Speak button, repeats your final score", lambda: app.repeat_current(), self._speak_btn),
-        ])
+            ("Speak button", lambda: app.repeat_current(), self._speak_btn),
+        ]
+        self._set_voice_nav_items(nav_items)
 
 
 # ---------------------------------------------------------------------------
-# App
+# Review screen
+# ---------------------------------------------------------------------------
+class ReviewScreen(VoiceNavMixin, Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._voice_nav_init()
+        root = BoxLayout(orientation="vertical", padding=dp(18), spacing=dp(8))
+        self.add_widget(root)
+
+        header = BoxLayout(size_hint_y=None, height=dp(32))
+        self.progress_label = Label(text="Reviewing Quiz", font_size=sp(15), bold=True, color=BLUE_ACCENT,
+                                     halign="left", valign="middle")
+        self.progress_label.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
+        header.add_widget(self.progress_label)
+        _bar, self._home_btn, self._speak_btn = build_icon_bar()
+        header.add_widget(_bar)
+        root.add_widget(header)
+
+        question_card = BoxLayout(padding=dp(14), size_hint=(1, 0.35))
+        with question_card.canvas.before:
+            Color(0.5, 0.5, 0.5, 1)
+            self._question_border = Line(width=dp(1.2))
+        question_card.bind(pos=self._redraw_border, size=self._redraw_border)
+        self.question_label = Label(text="", font_size=sp(18), bold=True, color=FG, halign="left", valign="top")
+        self.question_label.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
+        q_scroller = ScrollView(size_hint=(1, 1))
+        q_scroller.add_widget(self.question_label)
+        question_card.add_widget(q_scroller)
+        root.add_widget(question_card)
+
+        self.options_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(8))
+        self.options_box.bind(minimum_height=self.options_box.setter("height"))
+        opt_scroller = ScrollView(size_hint=(1, 1))
+        opt_scroller.add_widget(self.options_box)
+        root.add_widget(opt_scroller)
+
+        self.explanation_label = Label(text="", font_size=sp(12), color=MUTED, size_hint_y=None, height=dp(40), halign="left", valign="top")
+        self.explanation_label.bind(width=lambda w, *_: setattr(w, "text_size", (w.width, None)))
+        root.add_widget(self.explanation_label)
+
+        nav_row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(10))
+        self.prev_btn = PanelButton(text="Previous", bg_color=PANEL_BG, font_size=sp(14))
+        self.prev_btn.bind(on_release=guarded_release(lambda app: app.prev_review_q()))
+        self.next_btn = PanelButton(text="Next", bg_color=PURPLE, font_size=sp(14))
+        self.next_btn.bind(on_release=guarded_release(lambda app: app.next_review_q()))
+        nav_row.add_widget(self.prev_btn)
+        nav_row.add_widget(self.next_btn)
+        root.add_widget(nav_row)
+
+    def _redraw_border(self, widget, *_a):
+        self._question_border.rectangle = (widget.x, widget.y, widget.width, widget.height)
+
+    def render(self, q: dict, index: int, total: int, chosen: int | None):
+        letters = ["a.", "b.", "c.", "d."]
+        self.progress_label.text = f"Review Question {index + 1} of {total}"
+        self.question_label.text = q["question"]
+
+        self.options_box.clear_widgets()
+        correct_idx = q.get("correctIndex")
+
+        for i in range(4):
+            text = q["options"][i] if i < len(q["options"]) else ""
+            label_str = f"{letters[i]} {text}"
+            btn = OptionButton(text=label_str, font_size=sp(15))
+            if i == correct_idx:
+                btn.text = f"{label_str}  (Correct Answer)"
+                btn.bg_color = GREEN
+            elif i == chosen:
+                btn.text = f"{label_str}  (Your Answer)"
+                btn.bg_color = RED
+            else:
+                btn.bg_color = PURPLE_DARK
+            self.options_box.add_widget(btn)
+
+        if q.get("explanation"):
+            self.explanation_label.text = f"Why: {q['explanation']}"
+        else:
+            self.explanation_label.text = ""
+
+        self.prev_btn.disabled = (index == 0)
+        self.next_btn.text = "Done Review" if index == total - 1 else "Next"
+
+        app = App.get_running_app()
+        nav_items = [
+            ("Previous Question button", lambda: app.prev_review_q(), self.prev_btn),
+            ("Next Question button" if index < total - 1 else "Done Review button", lambda: app.next_review_q(), self.next_btn),
+            ("Home button", lambda: app.confirm_go_home(), self._home_btn),
+            ("Speak button", lambda: app.repeat_current(), self._speak_btn)
+        ]
+        self._set_voice_nav_items(nav_items)
+
+
+# ---------------------------------------------------------------------------
+# Settings Popup for TTS & Voices
+# ---------------------------------------------------------------------------
+class SettingsPopup(Popup):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.title = "TTS & Voice Settings"
+        self.size_hint = (0.85, 0.5)
+        self.auto_dismiss = True
+
+        content = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(12))
+        content.add_widget(Label(text="Select TTS Voice / Engine:", font_size=sp(14), bold=True, size_hint_y=None, height=dp(30)))
+
+        self.voice_spinner = Spinner(
+            text="Default System Voice",
+            values=["Default System Voice"],
+            size_hint_y=None,
+            height=dp(44)
+        )
+        content.add_widget(self.voice_spinner)
+
+        voices = _AndroidTTS.get_available_voices()
+        if voices:
+            v_names = [v[0] for v in voices]
+            self.voice_spinner.values = v_names
+            if _AndroidTTS._selected_voice:
+                self.voice_spinner.text = _AndroidTTS._selected_voice
+            else:
+                self.voice_spinner.text = v_names[0]
+
+        self.voice_spinner.bind(text=self.on_voice_change)
+        content.add_widget(Widget())
+
+        close_btn = PanelButton(text="Close", bg_color=PURPLE, height=dp(44))
+        close_btn.bind(on_release=self.dismiss)
+        content.add_widget(close_btn)
+
+        self.content = content
+
+    def on_voice_change(self, spinner, text):
+        if text and text != "Default System Voice":
+            _AndroidTTS.set_voice_by_name(text)
+            App.get_running_app().speak(f"Voice changed to {text}")
+
+
+# ---------------------------------------------------------------------------
+# File Picker Fallback Popup
+# ---------------------------------------------------------------------------
+class FilePickerPopup(Popup):
+    def __init__(self, callback, **kwargs):
+        super().__init__(**kwargs)
+        self.title = "Select Document (.pdf, .docx, .txt)"
+        self.size_hint = (0.95, 0.95)
+        self.callback = callback
+
+        content = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(10))
+        self.fc = FileChooserListView(
+            path=os.path.expanduser("~"),
+            filters=["*.pdf", "*.docx", "*.doc", "*.txt"]
+        )
+        content.add_widget(self.fc)
+
+        btn_row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(10))
+        cancel_btn = PanelButton(text="Cancel", bg_color=PANEL_BG)
+        cancel_btn.bind(on_release=self.dismiss)
+        select_btn = PanelButton(text="Select File", bg_color=PURPLE)
+        select_btn.bind(on_release=self._on_select)
+
+        btn_row.add_widget(cancel_btn)
+        btn_row.add_widget(select_btn)
+        content.add_widget(btn_row)
+
+        self.content = content
+
+    def _on_select(self, *_a):
+        if self.fc.selection:
+            selected = self.fc.selection[0]
+            self.dismiss()
+            self.callback(selected)
+
+
+# ---------------------------------------------------------------------------
+# Application Entry Point Class
 # ---------------------------------------------------------------------------
 class LPTestApp(App):
-    title = "LPTest"
+    voice_enabled = BooleanProperty(True)
 
     def build(self):
-        self.questions: list[dict] = []
-        self.user_answers: list = []
-        self.current_index = 0
-        self.mode_note = ""
-        self.filepath: str | None = None
-        self.current_quiz_filename: str | None = None
-        self._pending_pool: list[dict] = []
-        self.locked = False
-        self.voice_enabled = True
-        self.speech_rate = 1.0
-        self._count_select_prompt = ""
-
-        try:
-            quiz_history.configure_storage_dir(self.user_data_dir)
-        except Exception:
-            pass
-
+        self.title = "LPTest"
         self.sm = ScreenManager(transition=NoTransition())
-        self.landing = LandingScreen(name="landing")
-        self.count_select = CountSelectScreen(name="count_select")
-        self.quiz = QuizScreen(name="quiz")
-        self.summary = SummaryScreen(name="summary")
-        for s in (self.landing, self.count_select, self.quiz, self.summary):
-            self.sm.add_widget(s)
 
-        Clock.schedule_once(lambda *_: self.speak(
-            "Welcome to LPTest. Tap Upload File to begin, or tap Voice Guidance "
-            "to turn off spoken narration."
-        ), 1.0)
+        self.landing_screen = LandingScreen(name="landing")
+        self.count_screen = CountSelectScreen(name="count_select")
+        self.quiz_screen = QuizScreen(name="quiz")
+        self.summary_screen = SummaryScreen(name="summary")
+        self.review_screen = ReviewScreen(name="review")
+
+        self.sm.add_widget(self.landing_screen)
+        self.sm.add_widget(self.count_screen)
+        self.sm.add_widget(self.quiz_screen)
+        self.sm.add_widget(self.summary_screen)
+        self.sm.add_widget(self.review_screen)
+
+        self.current_filepath = None
+        self.questions = []
+        self.active_questions = []
+        self.current_q_index = 0
+        self.score = 0
+        self.user_answers = []
+        self.review_q_index = 0
+        self.selected_count = 10
+        self.current_filename = ""
+
         return self.sm
+
+    def voice_guard(self, action):
+        def wrapper(*args, **kwargs):
+            return action(self)
+        return wrapper
 
     def speak(self, text: str):
         if not self.voice_enabled or not text:
             return
         if platform == "android":
-            try:
-                _AndroidTTS.speak(text, rate=self.speech_rate)
-                return
-            except Exception as e:
-                print(f"LPTest: Android TTS failed, falling back to plyer: {e}")
-        try:
-            from plyer import tts
-            tts.speak(message=text)
-        except Exception:
-            pass
-
-    def voice_guard(self, func):
-        def wrapped(*args, **kwargs):
-            if self.voice_enabled:
-                return
-            return func(*args, **kwargs)
-        return wrapped
+            _AndroidTTS.speak(text)
+        else:
+            print(f"[Speech Output]: {text}")
 
     def toggle_voice(self):
         self.voice_enabled = not self.voice_enabled
-        self.landing.voice_btn.text = (
-            "Voice Guidance On" if self.voice_enabled
-            else "Voice Guidance Off"
-        )
+        status = "On" if self.voice_enabled else "Off"
+        self.landing_screen.voice_btn.text = f"Voice Guidance {status}"
         if self.voice_enabled:
-            self.speak("Voice guidance on.")
+            self.speak("Voice Guidance Enabled")
+        else:
+            self.speak("Voice Guidance Disabled")
 
     def open_settings(self):
-        content = BoxLayout(orientation="vertical", spacing=dp(12), padding=dp(16))
-        
-        content.add_widget(Label(
-            text="Voice Guidance Speech Rate", font_size=sp(15), bold=True,
-            color=FG, size_hint_y=None, height=dp(24)
-        ))
-        rate_label = Label(text=f"{self.speech_rate:.1f}x", font_size=sp(20), bold=True,
-                            color=PURPLE_LIGHT, size_hint_y=None, height=dp(32))
-        content.add_widget(rate_label)
-
-        slider = Slider(min=0.5, max=2.0, value=self.speech_rate, step=0.1,
-                         size_hint_y=None, height=dp(36))
-
-        def on_change(_slider, value):
-            self.speech_rate = round(value, 1)
-            rate_label.text = f"{self.speech_rate:.1f}x"
-
-        slider.bind(value=on_change)
-        content.add_widget(slider)
-
-        # Android TTS Voice Selection
-        voices = _AndroidTTS.get_available_voices()
-        if voices:
-            content.add_widget(Label(
-                text="Select TTS Voice", font_size=sp(15), bold=True,
-                color=FG, size_hint_y=None, height=dp(24)
-            ))
-            voice_names = [v[0] for v in voices]
-            current_voice = _AndroidTTS._selected_voice or voice_names[0]
-            
-            voice_spinner = Spinner(
-                text=current_voice,
-                values=voice_names,
-                size_hint_y=None,
-                height=dp(44),
-                background_color=PANEL_BG,
-                color=FG
-            )
-            def on_voice_select(_spinner, text):
-                _AndroidTTS.set_voice_by_name(text)
-                self.speak(f"Voice changed to {text}")
-
-            voice_spinner.bind(text=on_voice_select)
-            content.add_widget(voice_spinner)
-
-        test_btn = PanelButton(text="Test Voice", bg_color=PURPLE, font_size=sp(14), height=dp(44))
-        test_btn.bind(on_release=lambda *_: self.speak("This is a test of the voice guidance speech rate."))
-        content.add_widget(test_btn)
-
-        popup = Popup(title="Settings", content=content, size_hint=(0.9, 0.75))
-        close_btn = PanelButton(text="Close", bg_color=PANEL_BG, font_size=sp(14), height=dp(44))
-        close_btn.bind(on_release=lambda *_: popup.dismiss())
-        content.add_widget(close_btn)
-
+        popup = SettingsPopup()
         popup.open()
-        self.speak("Settings opened.")
-
-    def confirm_go_home(self):
-        content = VoiceNavBoxLayout(orientation="vertical", spacing=dp(14), padding=dp(16))
-        msg = Label(
-            text="Go back to the home screen?\nThis will end your current quiz.",
-            color=FG, font_size=sp(15), halign="center", valign="middle",
-        )
-        msg.bind(width=lambda w, *_: setattr(w, "text_size", (w.width, None)))
-        content.add_widget(msg)
-
-        popup = Popup(title="Leave Quiz?", content=content, size_hint=(0.85, 0.4),
-                       auto_dismiss=False)
-
-        btn_row = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(10))
-
-        def do_stay(*_a):
-            popup.dismiss()
-            self.speak("Staying on this screen.")
-
-        def do_leave(*_a):
-            popup.dismiss()
-            self.reset_to_landing()
-
-        stay_btn = PanelButton(text="No, stay here", bg_color=PANEL_BG, font_size=sp(14))
-        stay_btn.bind(on_release=guarded_release(lambda app: do_stay()))
-        leave_btn = PanelButton(text="Yes, go home", bg_color=PURPLE, font_size=sp(14))
-        leave_btn.bind(on_release=guarded_release(lambda app: do_leave()))
-        btn_row.add_widget(stay_btn)
-        btn_row.add_widget(leave_btn)
-        content.add_widget(btn_row)
-
-        content._set_voice_nav_items([
-            ("No, stay here button", do_stay, stay_btn),
-            ("Yes, go home button", do_leave, leave_btn),
-        ])
-
-        popup.open()
-        self.speak("Go back to the home screen? This will end your current quiz. "
-                    "Swipe to choose, then double-tap to confirm.")
-
-    def repeat_current(self):
-        screen = self.sm.current
-        letters = ["A", "B", "C", "D"]
-
-        if screen == "quiz" and self.questions:
-            q = self.questions[self.current_index]
-            prior = self.user_answers[self.current_index]
-            if prior is None:
-                opts = ". ".join(
-                    f"Option {letters[i]}: {q['options'][i]}"
-                    for i in range(min(4, len(q["options"])))
-                )
-                self.speak(
-                    f"Question {self.current_index + 1} of {len(self.questions)}. "
-                    f"{q['question']} {opts}"
-                )
-            else:
-                correct_idx = q.get("correctIndex")
-                if prior == correct_idx:
-                    msg = "You answered correctly."
-                else:
-                    correct_text = q["options"][correct_idx] if correct_idx is not None else "unknown"
-                    letter = letters[correct_idx] if correct_idx is not None else "?"
-                    msg = f"You answered incorrectly. The correct answer is option {letter}: {correct_text}."
-                if q.get("explanation"):
-                    msg += f" Why: {q['explanation']}"
-                self.speak(msg)
-        elif screen == "count_select":
-            self.speak(self._count_select_prompt or self.mode_note)
-        elif screen == "summary" and self.questions:
-            total = len(self.questions)
-            correct = sum(1 for i, q in enumerate(self.questions)
-                          if self.user_answers[i] == q.get("correctIndex"))
-            self.speak(f"Quiz complete. You scored {correct} out of {total}.")
-        else:
-            self.speak("Welcome to LPTest. Tap Upload File to begin.")
 
     def browse_file(self):
-        self.speak("Opening file picker.")
         if platform == "android":
             try:
-                self._android_pick_file()
+                from plyer import filechooser
+                filechooser.open_file(on_selection=self.on_file_selected)
                 return
             except Exception as e:
-                print(f"LPTest: Android file picker failed to open: {e}")
-                self.speak("Couldn't open the file picker. Trying the backup file browser.")
-        self._browse_file_desktop()
-
-    def _android_pick_file(self):
-        from jnius import autoclass
-        from android import activity, mActivity
-
-        Intent = autoclass("android.content.Intent")
-
-        if not hasattr(self, "_android_select_code"):
-            import random
-            self._android_select_code = random.randint(100000, 999999)
-            activity.bind(on_activity_result=self._android_on_activity_result)
-
-        intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
-        intent.addCategory(Intent.CATEGORY_OPENABLE)
-        intent.setType("*/*")
-        mActivity.startActivityForResult(intent, self._android_select_code)
-
-    def _android_on_activity_result(self, request_code, result_code, data):
-        if request_code != getattr(self, "_android_select_code", None):
-            return
-        from jnius import autoclass
-        Activity = autoclass("android.app.Activity")
-        if result_code != Activity.RESULT_OK or data is None:
-            Clock.schedule_once(lambda *_: self.speak("No file selected."), 0)
-            return
-        uri = data.getData()
-        Clock.schedule_once(lambda *_: self._android_copy_uri_to_temp(uri), 0)
-
-    def _android_copy_uri_to_temp(self, uri):
-        try:
-            from jnius import autoclass
-            from android import mActivity
-
-            resolver = mActivity.getContentResolver()
-            display_name = "uploaded_file"
-            try:
-                OpenableColumns = autoclass("android.provider.OpenableColumns")
-                cursor = resolver.query(uri, None, None, None, None)
-                if cursor is not None:
-                    idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    if idx != -1 and cursor.moveToFirst():
-                        display_name = cursor.getString(idx) or display_name
-                    cursor.close()
-            except Exception:
-                pass
-            display_name = os.path.basename(display_name) or "uploaded_file"
-
-            input_stream = resolver.openInputStream(uri)
-            dest_dir = os.path.join(self.user_data_dir, "picked_files")
-            os.makedirs(dest_dir, exist_ok=True)
-            dest_path = os.path.join(dest_dir, display_name)
-
-            buf = bytearray(65536)
-            with open(dest_path, "wb") as out:
-                while True:
-                    n = input_stream.read(buf)
-                    if n == -1:
-                        break
-                    out.write(bytes(buf[:n]))
-            input_stream.close()
-        except Exception as e:
-            print(f"LPTest: failed to copy picked file: {e}")
-            self._fail_load("Couldn't read that file. Please try a different file.")
-            return
-
-        self.load_file(dest_path)
-
-    def _browse_file_desktop(self):
-        chooser = FileChooserListView(filters=["*" + e for e in SUPPORTED_EXT] + ["*.*"],
-                                       path=os.path.expanduser("~"))
-        popup_box = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8))
-        popup_box.add_widget(chooser)
-        btn_row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
-        popup = Popup(title="Select a study document", content=popup_box, size_hint=(0.95, 0.95))
-
-        def do_select(*_a):
-            if chooser.selection:
-                path = chooser.selection[0]
-                popup.dismiss()
-                self.load_file(path)
-
-        select_btn = Button(text="Select", size_hint_x=0.5)
-        cancel_btn = Button(text="Cancel", size_hint_x=0.5)
-        select_btn.bind(on_release=do_select)
-        cancel_btn.bind(on_release=lambda *_: popup.dismiss())
-        btn_row.add_widget(select_btn)
-        btn_row.add_widget(cancel_btn)
-        popup_box.add_widget(btn_row)
+                print(f"Plyer chooser failed, fallback to popup: {e}")
+        popup = FilePickerPopup(callback=self.on_file_selected_path)
         popup.open()
 
-    def load_file(self, path: str):
-        self.landing.status_label.text = f"Reading {os.path.basename(path)} \u2026"
-        self.landing.status_label.color = MUTED
-        self.speak(f"Reading {os.path.basename(path)}. Please wait.")
-        Clock.schedule_once(lambda *_: self._load_file_now(path), 0.05)
+    def on_file_selected(self, selection):
+        if selection:
+            path = selection[0] if isinstance(selection, list) else selection
+            self.on_file_selected_path(path)
 
-    def _fail_load(self, message: str):
-        self.landing.status_label.text = message
-        self.landing.status_label.color = RED
-        self.speak(message)
-
-    def _load_file_now(self, path: str):
-        try:
-            result = extract_text(path)
-            if result.error:
-                self._fail_load(result.error)
-                return
-
-            self.filepath = path
-            self.current_quiz_filename = os.path.basename(path)
-            note = (result.warning + "\n") if result.warning else ""
-
-            existing = detect_existing_qa(result.text)
-            if existing:
-                questions = fill_missing_pieces_offline(existing, result.text)
-                if questions:
-                    self.mode_note = note + "Using your file's own questions."
-                    self.offer_count_select(questions)
-                    return
-
-            chunks = chunk_text(result.text, result.headings)
-            questions, skipped = generate_questions(chunks, result.text)
-            if not questions:
-                self._fail_load(
-                    "We couldn't find enough distinct facts in this file to build a fair "
-                    "quiz (need at least 4 distinct facts). Try a longer or more detailed file."
-                )
-                return
-
-            skip_note = f" ({len(skipped)} section(s) skipped.)" if skipped else ""
-            self.mode_note = note + "Questions generated from your file." + skip_note
-            self.offer_count_select(questions)
-        except Exception as e:
-            print(f"LPTest: unexpected error while reading file {path!r}: {e}")
-            self._fail_load(
-                "Something went wrong reading that file. Please try a different file."
-            )
-
-    def offer_count_select(self, questions: list[dict]):
-        total = len(questions)
-        self._pending_pool = questions
-        if total <= PRESET_COUNTS[0]:
-            self.start_quiz(questions)
+    def on_file_selected_path(self, path: str):
+        if not path or not os.path.exists(path):
+            self.landing_screen.status_label.text = "Invalid file selected."
             return
-        choices = [(f"{n} Questions", n) for n in PRESET_COUNTS if n < total]
-        choices.append((f"All Questions ({total})", total))
-        self.count_select.show_choices(choices, total, self.mode_note)
-        self.sm.current = "count_select"
-        labels = ", ".join(label for label, _ in choices)
-        self._count_select_prompt = (
-            f"{self.mode_note} How many questions would you like? Choose from: {labels}."
-        )
-        self.speak(self._count_select_prompt)
+
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in SUPPORTED_EXT:
+            self.landing_screen.status_label.text = f"Unsupported file type: {ext}"
+            return
+
+        self.current_filepath = path
+        self.current_filename = os.path.basename(path)
+        self.landing_screen.status_label.text = f"Processing: {self.current_filename}..."
+
+        Clock.schedule_once(lambda dt: self._process_file_async(path), 0.1)
+
+    def _process_file_async(self, path):
+        try:
+            text = extract_text(path)
+            if not text or len(text.strip()) < 20:
+                self.landing_screen.status_label.text = "Could not extract text from file."
+                return
+
+            qa_list = detect_existing_qa(text)
+            if qa_list and len(qa_list) >= 5:
+                self.questions = qa_list
+                mode_note = f"Found {len(qa_list)} existing questions in document."
+            else:
+                generated = generate_questions(text)
+                self.questions = generated
+                mode_note = f"Generated {len(generated)} questions from document."
+
+            if not self.questions:
+                self.landing_screen.status_label.text = "No questions could be generated."
+                return
+
+            total = len(self.questions)
+            choices = []
+            for count in PRESET_COUNTS:
+                if count <= total:
+                    choices.append((f"{count} Questions", count))
+            choices.append((f"All Questions ({total})", total))
+
+            self.count_screen.show_choices(choices, total, mode_note)
+            self.sm.current = "count_select"
+            self.speak("File loaded successfully. Please select the number of questions.")
+
+        except Exception as e:
+            print(f"Error processing file: {e}")
+            self.landing_screen.status_label.text = f"Error processing file: {e}"
 
     def start_quiz_with_count(self, count: int):
-        import random
-        pool = list(self._pending_pool)
-        random.shuffle(pool)
-        self.start_quiz(pool[:count])
+        self.selected_count = min(count, len(self.questions))
+        self.active_questions = self.questions[:self.selected_count]
+        self.current_q_index = 0
+        self.score = 0
+        self.user_answers = [None] * self.selected_count
 
-    def start_quiz(self, questions: list[dict]):
-        self.questions = questions
-        self.user_answers = [None] * len(questions)
-        self.current_index = 0
         self.sm.current = "quiz"
-        self.render_question()
+        self.render_current_question()
 
-    def render_question(self):
-        self.locked = False
-        q = self.questions[self.current_index]
-        prior = self.user_answers[self.current_index]
-        if prior is not None:
-            self.locked = True
-        self.quiz.render(q, self.current_index, len(self.questions), self.mode_note,
-                          self.locked, prior)
-        if not self.locked:
-            letters = ["A", "B", "C", "D"]
-            opts = ". ".join(
-                f"Option {letters[i]}: {q['options'][i]}" for i in range(min(4, len(q["options"])))
-            )
-            self.speak(
-                f"Question {self.current_index + 1} of {len(self.questions)}. "
-                f"{q['question']} {opts}"
-            )
+    def render_current_question(self):
+        q = self.active_questions[self.current_q_index]
+        chosen = self.user_answers[self.current_q_index]
+        locked = chosen is not None
+        self.quiz_screen.render(
+            q=q,
+            index=self.current_q_index,
+            total=self.selected_count,
+            mode_note="",
+            locked=locked,
+            chosen=chosen
+        )
+        if not locked:
+            self.speak(f"Question {self.current_q_index + 1}. {q['question']}")
 
     def select_option(self, idx: int):
-        if self.locked:
+        if self.user_answers[self.current_q_index] is not None:
             return
-        self.locked = True
-        self.user_answers[self.current_index] = idx
-        self.render_question()
 
-        letters = ["A", "B", "C", "D"]
-        q = self.questions[self.current_index]
+        self.user_answers[self.current_q_index] = idx
+        q = self.active_questions[self.current_q_index]
         correct_idx = q.get("correctIndex")
+
         if idx == correct_idx:
-            msg = "Correct! Well done."
+            self.score += 1
+            self.speak("Correct answer!")
         else:
-            correct_text = q["options"][correct_idx] if correct_idx is not None else "unknown"
-            letter = letters[correct_idx] if correct_idx is not None else "?"
-            msg = f"Incorrect. The correct answer is option {letter}: {correct_text}."
-        if q.get("explanation"):
-            msg += f" Why: {q['explanation']}"
-        self.speak(msg)
+            letters = ["A", "B", "C", "D"]
+            correct_text = q["options"][correct_idx] if correct_idx is not None else ""
+            self.speak(f"Incorrect. The correct answer is {letters[correct_idx]}, {correct_text}")
+
+        self.render_current_question()
 
     def next_question(self):
-        if self.current_index >= len(self.questions) - 1:
-            self.show_summary()
-            return
-        self.current_index += 1
-        self.render_question()
-
-    def show_summary(self, record: bool = True):
-        total = len(self.questions)
-        correct = sum(1 for i, q in enumerate(self.questions)
-                      if self.user_answers[i] == q.get("correctIndex"))
-        if record:
-            quiz_history.save_attempt(
-                filename=self.current_quiz_filename or "Untitled quiz",
-                questions=self.questions,
-                user_answers=self.user_answers,
-                score=correct,
-                total=total,
-                mode_note=self.mode_note,
-                filepath=self.filepath,
+        if self.current_q_index < self.selected_count - 1:
+            self.current_q_index += 1
+            self.render_current_question()
+        else:
+            quiz_history.save_quiz_result(
+                filename=self.current_filename,
+                score=self.score,
+                total=self.selected_count,
+                questions=self.active_questions,
+                user_answers=self.user_answers
             )
-        self.summary.render(self.questions, self.user_answers, correct, total)
-        self.sm.current = "summary"
-        self.speak(f"Quiz complete. You scored {correct} out of {total}.")
+            self.summary_screen.render(self.score, self.selected_count)
+            self.sm.current = "summary"
+            self.speak(f"Quiz complete! Your score is {self.score} out of {self.selected_count}.")
 
-    def retry_incorrect(self):
-        wrong = [q for i, q in enumerate(self.questions)
-                 if self.user_answers[i] != q.get("correctIndex")]
-        if not wrong:
-            self.reset_to_landing()
-            return
-        self.mode_note = "Retrying incorrect questions."
-        self.start_quiz(wrong)
+    def retake_current_quiz(self):
+        self.start_quiz_with_count(self.selected_count)
 
-    def reset_to_landing(self):
-        self.questions = []
-        self.user_answers = []
-        self.current_index = 0
-        self.filepath = None
-        self.current_quiz_filename = None
-        self.landing.status_label.text = ""
-        self.sm.current = "landing"
-        self.speak("Back to the home screen. Tap Upload File to begin.")
+    def start_review(self):
+        self.review_q_index = 0
+        self.sm.current = "review"
+        self.render_review_question()
+
+    def render_review_question(self):
+        q = self.active_questions[self.review_q_index]
+        chosen = self.user_answers[self.review_q_index]
+        self.review_screen.render(q, self.review_q_index, self.selected_count, chosen)
+        self.speak(f"Review question {self.review_q_index + 1}. {q['question']}")
+
+    def next_review_q(self):
+        if self.review_q_index < self.selected_count - 1:
+            self.review_q_index += 1
+            self.render_review_question()
+        else:
+            self.sm.current = "summary"
+
+    def prev_review_q(self):
+        if self.review_q_index > 0:
+            self.review_q_index -= 1
+            self.render_review_question()
 
     def retake_entry(self, entry: dict):
-        self.mode_note = entry.get("mode_note", "")
-        self.current_quiz_filename = entry.get("filename")
-        self.filepath = entry.get("filepath")
-        self.start_quiz(list(entry.get("questions") or []))
+        self.current_filename = entry.get("filename", "Quiz")
+        self.questions = entry.get("questions", [])
+        if self.questions:
+            self.start_quiz_with_count(len(self.questions))
 
     def review_entry(self, entry: dict):
-        self.questions = list(entry.get("questions") or [])
-        self.user_answers = list(entry.get("user_answers") or [])
-        while len(self.user_answers) < len(self.questions):
-            self.user_answers.append(None)
-        self.mode_note = entry.get("mode_note", "")
-        self.show_summary(record=False)
+        self.current_filename = entry.get("filename", "Quiz")
+        self.active_questions = entry.get("questions", [])
+        self.user_answers = entry.get("user_answers", [])
+        self.selected_count = len(self.active_questions)
+        if self.active_questions:
+            self.start_review()
+
+    def confirm_go_home(self):
+        self.sm.current = "landing"
+        self.landing_screen.refresh_history()
+        self.speak("Returned to Home Screen.")
+
+    def repeat_current(self):
+        curr_screen = self.sm.current_screen
+        if hasattr(curr_screen, "_voice_nav_items") and curr_screen._voice_nav_items:
+            idx = curr_screen._voice_nav_index
+            label = curr_screen._voice_nav_items[idx][0]
+            self.speak(label)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     LPTestApp().run()
