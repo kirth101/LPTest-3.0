@@ -40,7 +40,7 @@ from question_generator import (
 import quiz_history
 
 # ---------------------------------------------------------------------------
-# BUG 4 FIX: Safe Absolute Path Resolution para sa swipe.wav
+# SAFE ABSOLUTE PATH RESOLUTION (Audio)
 # ---------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SWIPE_PATH = os.path.join(BASE_DIR, 'swipe.wav')
@@ -58,11 +58,11 @@ def play_swipe_sound():
             print(f"LPTest: Audio play error: {e}")
 
 # ---------------------------------------------------------------------------
-# Palette — purple/violet theme
+# Palette — Purple/Violet Theme
 # ---------------------------------------------------------------------------
 BG = (0.043, 0.043, 0.043, 1)
 PANEL_BG = (0.086, 0.078, 0.129, 1)
-PURPLE = (0.482, 0.235, 0.898, 1)          # primary accent -- buttons, icons
+PURPLE = (0.482, 0.235, 0.898, 1)          # primary accent
 PURPLE_DARK = (0.322, 0.145, 0.671, 1)     # option button fill
 PURPLE_LIGHT = (0.702, 0.549, 0.988, 1)    # headings / title text
 BLUE_ACCENT = (0.376, 0.522, 0.984, 1)     # "Question X of Y" label
@@ -254,7 +254,7 @@ def option_font_size(options: list[str]) -> int:
 
 
 # ---------------------------------------------------------------------------
-# BUG 5 FIX: Dynamic Native TTS Engines & Voices Selection
+# Android Native TTS Helper
 # ---------------------------------------------------------------------------
 class _AndroidTTS:
     _engine = None
@@ -297,10 +297,13 @@ class _AndroidTTS:
 
     @classmethod
     def set_voice_by_name(cls, name: str):
+        engine = cls._get_engine()
+        if not engine:
+            return
         voices = cls.get_available_voices()
         for v_name, v_obj in voices:
             if v_name == name:
-                cls._get_engine().setVoice(v_obj)
+                engine.setVoice(v_obj)
                 cls._selected_voice = v_name
                 break
 
@@ -319,7 +322,7 @@ class _AndroidTTS:
 
 
 # ---------------------------------------------------------------------------
-# BUG 3 FIX: Safe Android Haptic Vibration Feedback
+# Android Native Haptic Vibration
 # ---------------------------------------------------------------------------
 def _android_vibrate(seconds: float):
     if platform != "android":
@@ -346,7 +349,7 @@ def _android_vibrate(seconds: float):
 def guarded_release(action):
     def handler(*_a):
         app = App.get_running_app()
-        app.voice_guard(action)(app)
+        action(app)
     return handler
 
 
@@ -366,7 +369,7 @@ def build_icon_bar(show_home: bool = True):
 
 
 # ---------------------------------------------------------------------------
-# BUG 1 & 2 FIX: Voice Nav Mixin with Touch Intercept & Scroll Lock
+# Voice Navigation & Accessibility Mixin
 # ---------------------------------------------------------------------------
 class VoiceNavMixin:
     _SWIPE_THRESHOLD = dp(28)
@@ -432,7 +435,7 @@ class VoiceNavMixin:
 
     def on_touch_down(self, touch):
         app = App.get_running_app()
-        if app.voice_enabled and self.collide_point(*touch.pos):
+        if app and app.voice_enabled and self.collide_point(*touch.pos):
             self._swipe_start = touch.pos
             hit = self._voice_nav_hit_test(touch.pos)
             if hit is not None:
@@ -443,16 +446,16 @@ class VoiceNavMixin:
 
     def on_touch_move(self, touch):
         app = App.get_running_app()
-        if app.voice_enabled and self._swipe_start is not None and self.collide_point(*touch.pos):
+        if app and app.voice_enabled and self._swipe_start is not None and self.collide_point(*touch.pos):
             hit = self._voice_nav_hit_test(touch.pos)
             if hit is not None:
                 self._voice_nav_focus(hit)
-            return True # Pigilan ang pag-scroll habang nagse-swipe
+            return True
         return super().on_touch_move(touch)
 
     def on_touch_up(self, touch):
         app = App.get_running_app()
-        if app.voice_enabled and self._swipe_start is not None and self.collide_point(*touch.pos):
+        if app and app.voice_enabled and self._swipe_start is not None and self.collide_point(*touch.pos):
             dx = touch.pos[0] - self._swipe_start[0]
             dy = touch.pos[1] - self._swipe_start[1]
             import time as _time
@@ -484,7 +487,7 @@ class VoiceNavBoxLayout(VoiceNavMixin, BoxLayout):
 
 
 # ---------------------------------------------------------------------------
-# Landing screen
+# Landing Screen
 # ---------------------------------------------------------------------------
 class LandingScreen(VoiceNavMixin, Screen):
     def __init__(self, **kwargs):
@@ -582,11 +585,10 @@ class LandingScreen(VoiceNavMixin, Screen):
         scroller.add_widget(self.history_list)
         root.add_widget(scroller)
 
-        app = App.get_running_app
         self._set_voice_nav_items([
-            ("Upload a file button", lambda: app().browse_file(), self.upload_btn),
-            ("Voice Guidance toggle button", lambda: app().toggle_voice(), self.voice_btn),
-            ("Settings button", lambda: app().open_settings(), self.gear_btn),
+            ("Upload a file button", lambda: App.get_running_app().browse_file(), self.upload_btn),
+            ("Voice Guidance toggle button", lambda: App.get_running_app().toggle_voice(), self.voice_btn),
+            ("Settings button", lambda: App.get_running_app().open_settings(), self.gear_btn),
         ])
 
     def on_pre_enter(self, *_a):
@@ -607,6 +609,7 @@ class LandingScreen(VoiceNavMixin, Screen):
             ))
             self._set_voice_nav_items(base_items)
             return
+
         app = App.get_running_app()
         nav_items = list(base_items)
         for entry in history[:20]:
@@ -637,7 +640,7 @@ class LandingScreen(VoiceNavMixin, Screen):
 
 
 # ---------------------------------------------------------------------------
-# Question-count selection
+# Count Selection Screen
 # ---------------------------------------------------------------------------
 class CountSelectScreen(VoiceNavMixin, Screen):
     def __init__(self, **kwargs):
@@ -679,7 +682,7 @@ class CountSelectScreen(VoiceNavMixin, Screen):
 
 
 # ---------------------------------------------------------------------------
-# Quiz screen
+# Quiz Screen
 # ---------------------------------------------------------------------------
 class QuizScreen(VoiceNavMixin, Screen):
     def __init__(self, **kwargs):
@@ -810,7 +813,7 @@ class QuizScreen(VoiceNavMixin, Screen):
 
 
 # ---------------------------------------------------------------------------
-# Summary screen
+# Summary Screen
 # ---------------------------------------------------------------------------
 class SummaryScreen(VoiceNavMixin, Screen):
     def __init__(self, **kwargs):
@@ -876,7 +879,7 @@ class SummaryScreen(VoiceNavMixin, Screen):
 
 
 # ---------------------------------------------------------------------------
-# Review screen
+# Review Screen
 # ---------------------------------------------------------------------------
 class ReviewScreen(VoiceNavMixin, Screen):
     def __init__(self, **kwargs):
@@ -1082,11 +1085,6 @@ class LPTestApp(App):
         self.current_filename = ""
 
         return self.sm
-
-    def voice_guard(self, action):
-        def wrapper(*args, **kwargs):
-            return action(self)
-        return wrapper
 
     def speak(self, text: str):
         if not self.voice_enabled or not text:
