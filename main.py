@@ -3,11 +3,12 @@ LPTest (Kivy rebuild) — entry point.
 
 Built on Kivy for Android (buildozer / python-for-android).
 Features self-contained spoken navigation, custom sound effects,
-haptic feedback, and Android TTS voice selection.
+haptic feedback, Android TTS voice selection, and error handling popups.
 """
 from __future__ import annotations
 
 import os
+import traceback
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -972,6 +973,35 @@ class ReviewScreen(VoiceNavMixin, Screen):
 
 
 # ---------------------------------------------------------------------------
+# Error Notification Popup
+# ---------------------------------------------------------------------------
+class ErrorPopup(Popup):
+    def __init__(self, message: str, **kwargs):
+        super().__init__(**kwargs)
+        self.title = "May Problema sa File"
+        self.size_hint = (0.85, 0.38)
+        self.auto_dismiss = True
+
+        content = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(12))
+
+        err_label = Label(
+            text=message,
+            font_size=sp(14),
+            color=FG,
+            halign="center",
+            valign="middle"
+        )
+        err_label.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
+        content.add_widget(err_label)
+
+        close_btn = PanelButton(text="OK", bg_color=PURPLE, height=dp(44))
+        close_btn.bind(on_release=self.dismiss)
+        content.add_widget(close_btn)
+
+        self.content = content
+
+
+# ---------------------------------------------------------------------------
 # Settings Popup for TTS & Voices
 # ---------------------------------------------------------------------------
 class SettingsPopup(Popup):
@@ -1126,37 +1156,49 @@ class LPTestApp(App):
     def on_file_selected_path(self, path: str):
         if not path or not os.path.exists(path):
             self.landing_screen.status_label.text = "Invalid file selected."
+            ErrorPopup("Hindi mahanap o di-valid ang napiling file.").open()
             return
 
         ext = os.path.splitext(path)[1].lower()
         if ext not in SUPPORTED_EXT:
             self.landing_screen.status_label.text = f"Unsupported file type: {ext}"
+            ErrorPopup(f"Hindi suportado ang ganitong uri ng file: {ext}\nGumamit lamang ng .pdf, .docx, .doc, o .txt").open()
             return
 
         self.current_filepath = path
         self.current_filename = os.path.basename(path)
-        self.landing_screen.status_label.text = f"Processing: {self.current_filename}..."
+        self.landing_screen.status_label.text = f"Binabasa ang: {self.current_filename}..."
+        self.speak("Binabasa ang file, sandali lamang.")
 
         Clock.schedule_once(lambda dt: self._process_file_async(path), 0.1)
 
     def _process_file_async(self, path):
         try:
+            print(f"LPTest Debug: Simula ng pag-extract ng text mula sa {path}")
             text = extract_text(path)
+
             if not text or len(text.strip()) < 20:
-                self.landing_screen.status_label.text = "Could not extract text from file."
+                print("LPTest Debug: Kulang o walang na-extract na text.")
+                self.landing_screen.status_label.text = "Walang nabasang teksto sa file."
+                ErrorPopup("Hindi makakuha ng sapat na teksto mula sa file na ito. Subukan ang ibang file.").open()
                 return
 
+            print(f"LPTest Debug: Na-extract ang text ({len(text)} characters). Sinusuri ang mga tanong...")
             qa_list = detect_existing_qa(text)
+
             if qa_list and len(qa_list) >= 5:
                 self.questions = qa_list
-                mode_note = f"Found {len(qa_list)} existing questions in document."
+                mode_note = f"May nakitang {len(qa_list)} na umiiral na tanong sa dokumento."
             else:
+                print("LPTest Debug: Walang nakitang existing Q&A, gumagawa gamit ang generator...")
                 generated = generate_questions(text)
                 self.questions = generated
-                mode_note = f"Generated {len(generated)} questions from document."
+                mode_note = f"Gumawa ng {len(generated)} na tanong mula sa dokumento."
 
             if not self.questions:
-                self.landing_screen.status_label.text = "No questions could be generated."
+                print("LPTest Debug: Nabigo gumawa ng mga tanong.")
+                self.landing_screen.status_label.text = "Walang nabuong tanong."
+                ErrorPopup("Hindi nakabuo ng mga tanong mula sa nilalaman ng file.").open()
                 return
 
             total = len(self.questions)
@@ -1166,13 +1208,16 @@ class LPTestApp(App):
                     choices.append((f"{count} Questions", count))
             choices.append((f"All Questions ({total})", total))
 
+            print(f"LPTest Debug: Tagumpay! May {total} na tanong. Lilipat sa count_select screen.")
             self.count_screen.show_choices(choices, total, mode_note)
             self.sm.current = "count_select"
             self.speak("File loaded successfully. Please select the number of questions.")
 
         except Exception as e:
-            print(f"Error processing file: {e}")
-            self.landing_screen.status_label.text = f"Error processing file: {e}"
+            print(f"LPTest Error sa pag-process ng file: {e}")
+            traceback.print_exc()
+            self.landing_screen.status_label.text = f"Error: {e}"
+            ErrorPopup(f"Nagka-problema sa pagbasa ng file:\n{str(e)}").open()
 
     def start_quiz_with_count(self, count: int):
         self.selected_count = min(count, len(self.questions))
