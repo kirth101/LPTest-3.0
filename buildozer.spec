@@ -8,14 +8,13 @@ source.include_exts = py,png,jpg,kv,atlas,wav,mp3
 
 version = 1.0
 
-# python-for-android pip package requirements needed on-device.
-# Inisama ang pyjnius para sa direct Android Native Access (TTS Engines & Haptic Vibration)
-requirements = python3==3.11.9,hostpython3==3.11.9,kivy==2.3.1,pypdf,plyer,pyjnius
+# python-for-android pip package requirements
+requirements = python3,kivy==2.3.1,pypdf,python-docx,plyer,pyjnius
 
 orientation = portrait
 fullscreen = 0
 
-# VIBRATE: haptic feedback on the swipe/double-tap accessibility gestures.
+# Android permissions for accessibility vibration
 android.permissions = INTERNET, VIBRATE
 
 android.minapi = 24
