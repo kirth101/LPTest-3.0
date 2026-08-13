@@ -4,7 +4,7 @@ package.name = lptest
 package.domain = org.lptest
 
 source.dir = .
-source.include_exts = py,png,jpg,kv,atlas,wav,mp3
+source.include_exts = py,png,jpg,kv,atlas,wav,mp3,json,txt
 
 version = 1.0
 
@@ -18,7 +18,7 @@ version = 1.0
 # build fails immediately with "python3 should have same version as
 # hostpython3". Unpinned "python3" resolves to whatever the newest
 # available release is (e.g. 3.14), which breaks other things too.
-requirements = python3==3.11.9,hostpython3==3.11.9,kivy==2.3.1,pypdf,plyer,pyjnius
+requirements = python3==3.11.9,hostpython3==3.11.9,kivy==2.3.1,pypdf,plyer,pyjnius,reportlab,requests
 
 orientation = portrait
 fullscreen = 0
