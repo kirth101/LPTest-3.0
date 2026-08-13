@@ -8,14 +8,14 @@ source.include_exts = py,png,jpg,kv,atlas,wav,mp3
 
 version = 1.0
 
-# python-for-android pip package requirements
-requirements = python3,kivy==2.3.1,pypdf,python-docx,plyer,pyjnius
+# Added "android" module and standard requirements
+requirements = python3,kivy==2.3.1,pypdf,python-docx,plyer,pyjnius,android
 
 orientation = portrait
 fullscreen = 0
 
-# Android permissions for accessibility vibration
-android.permissions = INTERNET, VIBRATE
+# Added necessary storage permissions for file parsing
+android.permissions = INTERNET, VIBRATE, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE
 
 android.minapi = 24
 android.api = 34
