@@ -26,14 +26,15 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.spinner import Spinner
 from kivy.uix.widget import Widget
 from kivy.uix.slider import Slider
+from kivy.uix.textinput import TextInput
 from kivy.utils import platform
 
 from file_parser import extract_text
 from question_generator import (
     detect_existing_qa,
-    fill_missing_pieces_offline,
     chunk_text,
-    generate_questions,
+    generate_questions_with_gemini,
+    generate_questions_offline,
 )
 import quiz_history
 
@@ -362,7 +363,11 @@ def build_icon_bar(show_home: bool = True):
         home_btn.bind(on_release=guarded_release(lambda app: app.confirm_go_home()))
         bar.add_widget(home_btn)
     speak_btn = SpeakIconButton()
-    speak_btn.bind(on_release=guarded_release(lambda app: app.repeat_current()))
+    # FIX 1: Speak button bypasses voice_guard so it always reads aloud when clicked manually even if voice guidance is off[cite: 9]
+    speak_btn.bind(on_release=lambda *_: (
+        App.get_running_app().play_swipe_sound(),
+        App.get_running_app().force_repeat_current()
+    ))
     bar.add_widget(speak_btn)
     return bar, home_btn, speak_btn
 
@@ -458,7 +463,6 @@ class VoiceNavMixin:
 
             if abs(dx) > self._SWIPE_THRESHOLD and abs(dx) > abs(dy):
                 self._haptic(short=True)
-                # FIX 1: Consistent top-to-bottom sequence mapping for swipe right / left
                 self._voice_nav_move(1 if dx > 0 else -1)
                 self._swipe_start = None
                 return True
@@ -656,7 +660,7 @@ class CountSelectScreen(VoiceNavMixin, Screen):
             self.btns_box.add_widget(btn)
             nav_items.append((f"{label} button", (lambda count=n: app.start_quiz_with_count(count)), btn))
         nav_items.append(("Home button", lambda: app.confirm_go_home(), self._home_btn))
-        nav_items.append(("Speak button", lambda: app.repeat_current(), self._speak_btn))
+        nav_items.append(("Speak button", lambda: app.force_repeat_current(), self._speak_btn))
         self._set_voice_nav_items(nav_items)
 
 
@@ -707,7 +711,6 @@ class QuizScreen(VoiceNavMixin, Screen):
         self.status_label.bind(texture_size=lambda w, *_: setattr(w, "height", w.texture_size[1] + dp(4)))
         root.add_widget(self.status_label)
 
-        # FIX 3: Enhanced Explanation Label in lower part of screen
         self.explanation_label = Label(text="", font_size=sp(13), color=CYAN_ACCENT,
                                        size_hint_y=None, height=dp(0), halign="left", valign="top")
         self.explanation_label.bind(width=lambda w, *_: setattr(w, "text_size", (w.width, None)))
@@ -715,8 +718,11 @@ class QuizScreen(VoiceNavMixin, Screen):
         root.add_widget(self.explanation_label)
 
         action_row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(10))
-        # FIX 2: Removed save button during quiz, next_btn takes full width (1.0)
-        self.next_btn = Label(text="Next Question", font_size=sp(16), color=MUTED, size_hint_x=1.0, halign="center", valign="middle")
+        # FIX 3: Next Question button is now fully interactive (ButtonBehavior) and highlights when user has answered[cite: 9]
+        self.next_btn = Button(text="Next Question", font_size=sp(16), color=MUTED,
+                               background_normal="", background_down="", background_color=(0, 0, 0, 0),
+                               size_hint_x=1.0, halign="center", valign="middle")
+        self.next_btn.bind(on_release=lambda *_: App.get_running_app().next_question())
         action_row.add_widget(self.next_btn)
         root.add_widget(action_row)
 
@@ -765,7 +771,7 @@ class QuizScreen(VoiceNavMixin, Screen):
                 self.status_label.text = f"The correct answer is {letters[correct_idx]} {correct_text}"
                 self.status_label.color = RED
             
-            # FIX 3: Show detailed explanation in lower part after choice selection
+            # FIX 4: Full explanation displayed and read aloud[cite: 9]
             explanation_text = q.get("explanation")
             if not explanation_text:
                 correct_opt_text = q['options'][correct_idx] if correct_idx is not None and correct_idx < len(q['options']) else "the correct option"
@@ -774,11 +780,13 @@ class QuizScreen(VoiceNavMixin, Screen):
             
             self.next_btn.text = "Finish Quiz >" if index == total - 1 else "Next Question >"
             self.next_btn.color = PURPLE_LIGHT
+            self.next_btn.bold = True
         else:
             self.status_label.text = ""
             self.explanation_label.text = ""
             self.next_btn.text = "Next Question"
             self.next_btn.color = MUTED
+            self.next_btn.bold = False
 
         app = App.get_running_app()
         if not locked:
@@ -791,7 +799,7 @@ class QuizScreen(VoiceNavMixin, Screen):
             next_label = "Finish Quiz button" if index == total - 1 else "Next Question button"
             nav_items = [(next_label, lambda: app.next_question(), self.next_btn)]
         nav_items.append(("Home button", lambda: app.confirm_go_home(), self._home_btn))
-        nav_items.append(("Speak button", lambda: app.repeat_current(), self._speak_btn))
+        nav_items.append(("Speak button", lambda: app.force_repeat_current(), self._speak_btn))
         self._set_voice_nav_items(nav_items)
 
 
@@ -825,7 +833,6 @@ class SummaryScreen(VoiceNavMixin, Screen):
         root.add_widget(scroller)
 
         actions = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8))
-        # FIX 2: Save Quiz button present here in Summary Screen with TXT/PDF save option
         self.save_btn = PanelButton(text="Save Questions", bg_color=PANEL_BG, font_size=sp(13))
         self.save_btn.bind(on_release=guarded_release(lambda app: app.prompt_save_quiz_format()))
         self.retry_btn = PanelButton(text="Retry Incorrect", bg_color=PURPLE, font_size=sp(13))
@@ -880,7 +887,7 @@ class SummaryScreen(VoiceNavMixin, Screen):
             ("Retry Incorrect button", lambda: app.retry_incorrect(), self.retry_btn),
             ("Upload New File button", lambda: app.reset_to_landing(), self.new_btn),
             ("Home button", lambda: app.confirm_go_home(), self._home_btn),
-            ("Speak button", lambda: app.repeat_current(), self._speak_btn),
+            ("Speak button", lambda: app.force_repeat_current(), self._speak_btn),
         ])
 
 
@@ -905,6 +912,7 @@ class LPTestApp(App):
         self.voice_enabled = True
         self.speech_rate = 1.0
         self.selected_tts_engine = "default"
+        self.gemini_api_key = ""
         self._count_select_prompt = ""
         self._swipe_sound = None
 
@@ -954,11 +962,17 @@ class LPTestApp(App):
         except Exception:
             pass
 
+    def force_repeat_current(self):
+        """Pinipilit basahin ang kasalukuyang tanong o paliwanag kahit naka-off ang voice guidance[cite: 9]."""
+        old_val = self.voice_enabled
+        self.voice_enabled = True
+        self.repeat_current()
+        self.voice_enabled = old_val
+
     def voice_guard(self, func):
         def wrapped(*args, **kwargs):
             if self.voice_enabled:
-                return
-            return func(*args, **kwargs)
+                return func(*args, **kwargs)
         return wrapped
 
     def toggle_voice(self):
@@ -974,9 +988,25 @@ class LPTestApp(App):
         content = VoiceNavBoxLayout(orientation="vertical", spacing=dp(14), padding=dp(18))
         
         content.add_widget(Label(
-            text="Voice Guidance Settings", font_size=sp(16), bold=True,
+            text="Settings & API Configuration", font_size=sp(16), bold=True,
             color=FG, size_hint_y=None, height=dp(28)
         ))
+
+        content.add_widget(Label(text="Gemini API Key (for Online Module Generation):", font_size=sp(13),
+                                 color=MUTED, size_hint_y=None, height=dp(20), halign="left"))
+        
+        api_input = TextInput(
+            text=self.gemini_api_key,
+            hint_text="Enter Gemini API Key",
+            multiline=False,
+            size_hint_y=None, height=dp(44),
+            background_color=PANEL_BG, foreground_color=FG,
+            cursor_color=CYAN_ACCENT
+        )
+        def on_api_change(instance, value):
+            self.gemini_api_key = value.strip()
+        api_input.bind(text=on_api_change)
+        content.add_widget(api_input)
 
         content.add_widget(Label(text="Select Speech Engine (TTS):", font_size=sp(13),
                                  color=MUTED, size_hint_y=None, height=dp(20), halign="left"))
@@ -1024,13 +1054,14 @@ class LPTestApp(App):
         test_btn.bind(on_release=lambda *_: self.speak("Testing voice guidance audio."))
         content.add_widget(test_btn)
 
-        popup = Popup(title="Speech Settings", content=content, size_hint=(0.88, 0.65))
+        popup = Popup(title="Settings", content=content, size_hint=(0.88, 0.75))
         close_btn = PanelButton(text="Close", bg_color=PANEL_BG, font_size=sp(14), height=dp(44))
         close_btn.bind(on_release=lambda *_: popup.dismiss())
         content.add_widget(close_btn)
 
         def update_settings_nav():
             content._set_voice_nav_items([
+                ("Gemini API key input field", None, api_input),
                 (f"Select Speech Engine. Currently {spinner.text}", lambda: spinner.dispatch('on_release'), spinner),
                 (f"Speech speed rate. Currently {self.speech_rate:.1f}x", None, slider),
                 ("Test Voice button", lambda: self.speak("Testing voice guidance audio."), test_btn),
@@ -1040,9 +1071,8 @@ class LPTestApp(App):
         update_settings_nav()
 
         popup.open()
-        self.speak("Settings opened. Choose TTS engine or adjust speech rate.")
+        self.speak("Settings opened. Configure Gemini API key or speech settings.")
 
-    # FIX 2: Prompt user to save quiz as TXT or PDF file format
     def prompt_save_quiz_format(self):
         if not self.questions:
             return
@@ -1221,8 +1251,15 @@ class LPTestApp(App):
                 self.speak(f"Question {self.current_index + 1} of {len(self.questions)}. {q['question']} {opts}")
             else:
                 correct_idx = q.get("correctIndex")
-                msg = "You answered correctly." if prior == correct_idx else f"Correct answer is {letters[correct_idx]}."
-                self.speak(msg)
+                correct_text = q['options'][correct_idx] if correct_idx is not None and correct_idx < len(q['options']) else "unknown"
+                is_correct = prior == correct_idx
+                result_msg = "You answered correctly." if is_correct else f"Incorrect. Correct answer is option {letters[correct_idx] if correct_idx is not None else ''} {correct_text}."
+                
+                # FIX 4: Read full explanation aloud[cite: 9]
+                explanation_text = q.get("explanation")
+                if not explanation_text:
+                    explanation_text = f"The correct answer is option {letters[correct_idx] if correct_idx is not None else ''} {correct_text}."
+                self.speak(f"{result_msg} Explanation: {explanation_text}")
         elif screen == "count_select":
             self.speak(self._count_select_prompt or self.mode_note)
         elif screen == "summary" and self.questions:
@@ -1230,7 +1267,7 @@ class LPTestApp(App):
             correct = sum(1 for i, q in enumerate(self.questions) if self.user_answers[i] == q.get("correctIndex"))
             self.speak(f"Quiz complete. You scored {correct} out of {total}.")
         else:
-            self.speak("Welcome to LPTest. Developed by Direk Allan. Upload a file to start the quiz.")
+            self.speak(f"Welcome to LPTest. Developed by {DEVELOPER_NAME}. Upload a file to start the quiz.")
 
     def browse_file(self):
         self.speak("Opening file picker.")
@@ -1364,22 +1401,31 @@ class LPTestApp(App):
             self.current_quiz_filename = os.path.basename(path)
             note = (result.warning + "\n") if result.warning else ""
 
+            # 1. Subukin munang basahin kung may existing Q&A ang file (offline re-upload)
             existing = detect_existing_qa(result.text)
             if existing:
-                questions = fill_missing_pieces_offline(existing, result.text)
+                self.mode_note = note + "Using your file's own questions."
+                self.offer_count_select(existing)
+                return
+
+            # 2. Subukin ang Gemini Online Generator kung may API key
+            if self.gemini_api_key:
+                self.landing.status_label.text = f"Generating questions with Gemini \u2026"
+                questions, err = generate_questions_with_gemini(result.text, self.gemini_api_key)
                 if questions:
-                    self.mode_note = note + "Using your file's own questions."
+                    self.mode_note = note + "Questions generated via Google Gemini AI."
                     self.offer_count_select(questions)
                     return
 
+            # 3. Offline Chunking & Fallback kung walang API key o walang net
             chunks = chunk_text(result.text, result.headings)
-            questions, skipped = generate_questions(chunks, result.text)
+            questions, skipped = generate_questions_offline(chunks, result.text)
             if not questions:
-                self._fail_load("Couldn't find enough distinct questions in this file.")
+                self._fail_load("Couldn't find enough distinct questions in this file. Please add a Gemini API Key in Settings.")
                 return
 
             skip_note = f" ({len(skipped)} section(s) skipped.)" if skipped else ""
-            self.mode_note = note + "Questions generated from your file." + skip_note
+            self.mode_note = note + "Questions generated offline." + skip_note
             self.offer_count_select(questions)
         except Exception as e:
             print(f"LPTest: File load error {path}: {e}")
@@ -1447,7 +1493,7 @@ class LPTestApp(App):
             letter = letters[correct_idx] if correct_idx is not None else "?"
             msg = f"Incorrect. Correct answer is option {letter}: {correct_text}."
             
-        # FIX 3: Include detailed explanation in TTS speech as well
+        # FIX 4: Kasama na ang kumpletong explanation sa binabasa ng boses[cite: 9]
         explanation_text = q.get("explanation")
         if not explanation_text:
             correct_opt_text = q['options'][correct_idx] if correct_idx is not None and correct_idx < len(q['options']) else ""
