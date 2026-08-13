@@ -1,7 +1,7 @@
 """
 question_generator.py
 Complete and Verified Version: Handles Existing Q&A Detection, 
-Google Gemini API Generation, and Offline Fallback without any omissions.
+Google Gemini API Generation, and Offline Fallback.
 """
 
 from __future__ import annotations
@@ -19,9 +19,8 @@ DEFINITION_RE = re.compile(
 )
 
 # ---------------------------------------------------------------------------
-# 1. Detect existing Q&A in uploaded files (Para sa offline re-upload ng downloaded files)
+# 1. Detect existing Q&A in uploaded files
 # ---------------------------------------------------------------------------
-
 _NUMBERED_Q_RE = re.compile(r"^\s*\d+[\.\)]\s*(.+?)\s*$")
 _QLABEL_RE = re.compile(r"^\s*Q\s*[:.]\s*(.+)$", re.IGNORECASE)
 _QHEADER_RE = re.compile(r"^\s*Question\s+\d+\s*[:.]?\s*(.*)$", re.IGNORECASE)
@@ -31,16 +30,14 @@ _ANSWER_KEY_LINE_RE = re.compile(r"^\s*(\d+)\s*[\.\):-]\s*([a-dA-D])\s*$")
 _ANSWER_LEADING_LETTER_RE = re.compile(r"^\s*([a-dA-D])[\.\):]\s*(.*)$")
 
 def detect_existing_qa(text: str) -> Optional[list[dict]]:
-    """Idine-detect kung ang in-upload na file ay mayroon nang mga tanong at pagpipilian (tulad ng na-download na quiz file)."""
     research_indicators = ["chapter i", "statement of the problem", "review of related literature", "methodology", "presentation, analysis"]
     text_lower = text.lower()
     matches_count = sum(1 for ind in research_indicators if ind in text_lower)
     if matches_count >= 2:
-        return None # Raw research document ito, kaya dadaan sa AI generator sa halip na existing Q&A parser.
+        return None
 
     lines = [l for l in text.splitlines()]
     n = len(lines)
-
     questions: list[dict] = []
     i = 0
     q_index = 0
@@ -88,7 +85,6 @@ def detect_existing_qa(text: str) -> Optional[list[dict]]:
                     continue
 
             answer_letter = None
-
             while i < n:
                 nxt = lines[i].strip()
                 if not nxt:
@@ -127,14 +123,12 @@ def detect_existing_qa(text: str) -> Optional[list[dict]]:
 
     if not questions or len(questions) < 2:
         return None
-
     return questions
 
 
 # ---------------------------------------------------------------------------
 # 2. Chunking & Gemini Online Generation
 # ---------------------------------------------------------------------------
-
 @dataclass
 class Chunk:
     content: str
@@ -165,7 +159,6 @@ def chunk_text(text: str, headings: list[tuple[str, int]] | None = None, target_
             chunks[-1].content += "\n" + content
         else:
             chunks.append(Chunk(content=content, label="Section 1"))
-
     return chunks
 
 def _finalize_question(question: str, options: list[str], correct_index: int, source_chunk: str, explanation: Optional[str] = None) -> dict:
@@ -178,11 +171,10 @@ def _finalize_question(question: str, options: list[str], correct_index: int, so
     }
 
 def generate_questions_with_gemini(text: str, api_key: str) -> tuple[list[dict], Optional[str]]:
-    """Gumagamit ng Google Gemini API para mag-generate ng mga de-kalidad na tanong mula sa buong module o research paper."""
     try:
         import google.generativeai as genai
     except ImportError:
-        return [], "Google Generative AI package is not installed. Run: pip install google-generativeai"
+        return [], "Google Generative AI package is not installed."
 
     if not api_key:
         return [], "Gemini API Key is missing."
@@ -231,12 +223,9 @@ def generate_questions_with_gemini(text: str, api_key: str) -> tuple[list[dict],
                     source_chunk=text[:200],
                     explanation=q.get("explanation", "Correct answer based on the lesson module.")
                 ))
-                
         if not formatted_questions:
             return [], "Gemini returned empty or invalid question structures."
-            
         return formatted_questions, None
-
     except Exception as e:
         return [], f"Gemini API Error: {str(e)}"
 
@@ -244,7 +233,6 @@ def generate_questions_with_gemini(text: str, api_key: str) -> tuple[list[dict],
 # ---------------------------------------------------------------------------
 # 3. Offline Fallback Generator
 # ---------------------------------------------------------------------------
-
 def generate_questions_offline(chunks: list[Chunk], full_text: str) -> tuple[list[dict], list[str]]:
     questions: list[dict] = []
     skipped: list[str] = []
@@ -265,5 +253,4 @@ def generate_questions_offline(chunks: list[Chunk], full_text: str) -> tuple[lis
             ))
         else:
             skipped.append(chunk.label)
-
     return questions, skipped
