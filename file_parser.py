@@ -63,7 +63,7 @@ def _extract_docx(filepath: str) -> ExtractionResult:
     import zipfile
     import xml.etree.ElementTree as ET
 
-    W_NS = "{[http://schemas.openxmlformats.org/wordprocessingml/2006/main](http://schemas.openxmlformats.org/wordprocessingml/2006/main)}"
+    W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
     try:
         with zipfile.ZipFile(filepath) as zf:
