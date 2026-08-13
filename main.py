@@ -40,14 +40,14 @@ import quiz_history
 # ---------------------------------------------------------------------------
 # Palette — Purple / Cyan / Dark Theme (Matching Reference UI)
 # ---------------------------------------------------------------------------
-BG = (0.02, 0.02, 0.04, 1)                  # Very dark violet/black background
+BG = (0.02, 0.02, 0.04, 1)                  
 PANEL_BG = (0.086, 0.078, 0.129, 1)
-PURPLE = (0.482, 0.235, 0.898, 1)           # Primary accent -- `#7C3AED`
-PURPLE_DARK = (0.34, 0.11, 0.74, 1)         # Option button background `#581C87`
-PURPLE_LIGHT = (0.65, 0.35, 0.98, 1)        # Title violet accent `#A855F7`
-CYAN_ACCENT = (0.22, 0.74, 0.97, 1)         # "LPTest" Cyan label `#38BDF8`
-BLUE_ACCENT = (0.38, 0.52, 0.98, 1)         # "Question X of Y" label `#818CF8`
-PINK_ACCENT = (0.92, 0.35, 0.65, 1)         # "Your Previous Quizzes" heading `#EC4899`
+PURPLE = (0.482, 0.235, 0.898, 1)           
+PURPLE_DARK = (0.34, 0.11, 0.74, 1)         
+PURPLE_LIGHT = (0.65, 0.35, 0.98, 1)        
+CYAN_ACCENT = (0.22, 0.74, 0.97, 1)         
+BLUE_ACCENT = (0.38, 0.52, 0.98, 1)         
+PINK_ACCENT = (0.92, 0.35, 0.65, 1)         
 FG = (0.961, 0.961, 0.961, 1)
 GREEN = (0.184, 0.682, 0.306, 1)
 RED = (0.851, 0.263, 0.184, 1)
@@ -75,7 +75,7 @@ KV = """
     color: 1, 1, 1, 1
     bold: True
     size_hint_y: None
-    height: dp(52)
+    height: dp(54)
 
 <CapsuleButton>:
     background_normal: ''
@@ -96,7 +96,7 @@ KV = """
     color: 1, 1, 1, 1
     bold: True
     size_hint_y: None
-    height: dp(44)
+    height: dp(48)
 
 <OptionButton>:
     canvas.before:
@@ -131,10 +131,8 @@ Builder.load_string(KV)
 class PanelButton(Button):
     bg_color = ListProperty(PURPLE)
 
-
 class CapsuleButton(Button):
     pass
-
 
 class _RoundIconButton(ButtonBehavior, Widget):
     bg_color = ListProperty(PURPLE)
@@ -162,7 +160,6 @@ class _RoundIconButton(ButtonBehavior, Widget):
         self._bg_ellipse.pos = self.pos
         self._bg_ellipse.size = self.size
 
-
 class HomeIconButton(_RoundIconButton):
     def _build_lines(self):
         self._roof = Line(width=dp(1.8), cap="round", joint="round")
@@ -183,7 +180,6 @@ class HomeIconButton(_RoundIconButton):
             cx - s * 0.18, cy - s * 0.95, cx - s * 0.18, cy - s * 0.30,
             cx + s * 0.18, cy - s * 0.30, cx + s * 0.18, cy - s * 0.95,
         ]
-
 
 class SpeakIconButton(_RoundIconButton):
     def _build_lines(self):
@@ -207,11 +203,10 @@ class SpeakIconButton(_RoundIconButton):
         self._wave1.circle = (cx + s * 0.15, cy, s * 0.55, -45, 45)
         self._wave2.circle = (cx + s * 0.15, cy, s * 0.95, -45, 45)
 
-
 class GearIconButton(ButtonBehavior, Widget):
     def __init__(self, **kwargs):
         kwargs.setdefault("size_hint", (None, None))
-        kwargs.setdefault("size", (dp(40), dp(40)))
+        kwargs.setdefault("size", (dp(44), dp(44)))
         super().__init__(**kwargs)
         with self.canvas.after:
             Color(0.85, 0.85, 0.88, 1)
@@ -235,7 +230,6 @@ class GearIconButton(ButtonBehavior, Widget):
             y2 = cy + math.sin(angle) * r * 1.55
             line.points = [x1, y1, x2, y2]
 
-
 class OptionButton(ButtonBehavior, Label):
     bg_color = ListProperty(PURPLE_DARK)
 
@@ -249,10 +243,8 @@ class OptionButton(ButtonBehavior, Label):
     def _reheight(self, *_a):
         self.height = max(dp(54), self.texture_size[1] + dp(28))
 
-
 class HistoryRow(BoxLayout):
     pass
-
 
 def option_font_size(options: list[str]) -> int:
     longest = max((len(o) for o in options), default=0)
@@ -265,9 +257,8 @@ def option_font_size(options: list[str]) -> int:
         return 15
     return 14
 
-
 # ---------------------------------------------------------------------------
-# Android TextToSpeech Wrapper (Engine Selection Enabled)
+# Android TextToSpeech Wrapper (Fixed Queue Issue)
 # ---------------------------------------------------------------------------
 class _AndroidTTS:
     _engine = None
@@ -279,7 +270,6 @@ class _AndroidTTS:
             return [("Default System Engine", "default")]
         try:
             from jnius import autoclass
-            TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
             engine = cls._get_engine()
             engines_list = engine.getEngines()
             result = []
@@ -298,7 +288,6 @@ class _AndroidTTS:
         try:
             from jnius import autoclass
             TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
-            Locale = autoclass("java.util.Locale")
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
             if cls._engine is not None:
                 try:
@@ -307,7 +296,6 @@ class _AndroidTTS:
                     pass
             cls._engine_pkg = pkg_name
             cls._engine = TextToSpeech(PythonActivity.mActivity, None, pkg_name)
-            cls._engine.setLanguage(Locale.US)
         except Exception as e:
             print(f"LPTest: Could not set TTS engine {pkg_name}: {e}")
 
@@ -316,23 +304,27 @@ class _AndroidTTS:
         if cls._engine is None:
             from jnius import autoclass
             TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
-            Locale = autoclass("java.util.Locale")
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
             if cls._engine_pkg:
                 cls._engine = TextToSpeech(PythonActivity.mActivity, None, cls._engine_pkg)
             else:
                 cls._engine = TextToSpeech(PythonActivity.mActivity, None)
-            cls._engine.setLanguage(Locale.US)
         return cls._engine
 
     @classmethod
     def speak(cls, message: str, rate: float = 1.0):
-        from jnius import autoclass
-        TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
-        engine = cls._get_engine()
-        engine.setSpeechRate(max(0.1, rate))
-        engine.speak(message, TextToSpeech.QUEUE_FLUSH, None)
-
+        if platform != "android":
+            return
+        try:
+            from jnius import autoclass
+            Locale = autoclass("java.util.Locale")
+            engine = cls._get_engine()
+            engine.setLanguage(Locale.US)
+            engine.setSpeechRate(max(0.1, rate))
+            # 0 is the constant for TextToSpeech.QUEUE_FLUSH
+            engine.speak(message, 0, None)
+        except Exception as e:
+            print(f"LPTest: TTS Speak error: {e}")
 
 def _android_vibrate(seconds: float):
     if platform != "android":
@@ -355,7 +347,6 @@ def _android_vibrate(seconds: float):
     except Exception as e:
         print(f"LPTest: Vibrator error: {e}")
 
-
 def guarded_release(action):
     def handler(*_a):
         app = App.get_running_app()
@@ -363,11 +354,9 @@ def guarded_release(action):
         app.voice_guard(action)(app)
     return handler
 
-
 def build_icon_bar(show_home: bool = True):
     width = dp(44) * (2 if show_home else 1) + (dp(8) if show_home else 0)
-    bar = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint=(None, None),
-                     size=(width, dp(44)))
+    bar = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint=(None, None), size=(width, dp(44)))
     home_btn = None
     if show_home:
         home_btn = HomeIconButton()
@@ -378,10 +367,6 @@ def build_icon_bar(show_home: bool = True):
     bar.add_widget(speak_btn)
     return bar, home_btn, speak_btn
 
-
-# ---------------------------------------------------------------------------
-# Touch Navigation Mixin (Enhanced Haptic Feedback on Swipe)
-# ---------------------------------------------------------------------------
 class VoiceNavMixin:
     _SWIPE_THRESHOLD = dp(24)
     _DOUBLE_TAP_WINDOW = 0.35
@@ -490,55 +475,54 @@ class VoiceNavMixin:
         self._swipe_start = None
         return super().on_touch_up(touch)
 
-
 class VoiceNavBoxLayout(VoiceNavMixin, BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._voice_nav_init()
 
-
 # ---------------------------------------------------------------------------
-# Landing Screen (UI Matched to Reference Image 1)
+# Landing Screen (Fixed Layout Padding and Spacing)
 # ---------------------------------------------------------------------------
 class LandingScreen(VoiceNavMixin, Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._voice_nav_init()
-        root = BoxLayout(orientation="vertical", padding=[dp(20), dp(28), dp(20), dp(16)],
-                         spacing=dp(16))
+        # Increased spacing and padding so it won't look "dikit dikit"
+        root = BoxLayout(orientation="vertical", padding=[dp(24), dp(40), dp(24), dp(20)], spacing=dp(20))
         self.add_widget(root)
 
         # Header Title (Welcome to LPTest)
-        title_box = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(64))
+        title_box = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(70), spacing=dp(4))
         
-        t1 = Label(text="Welcome to ", font_size=sp(24), bold=True, color=PURPLE_LIGHT)
-        t2 = Label(text="LPTest", font_size=sp(24), bold=True, color=CYAN_ACCENT)
+        t1 = Label(text="Welcome to ", font_size=sp(26), bold=True, color=PURPLE_LIGHT, size_hint_x=None, width=dp(145))
+        t2 = Label(text="LPTest", font_size=sp(26), bold=True, color=CYAN_ACCENT, size_hint_x=None, width=dp(95))
         
-        header_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(32))
-        header_row.add_widget(Widget())  # Spacer
+        header_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(36))
+        header_row.add_widget(Widget())  
         header_row.add_widget(t1)
         header_row.add_widget(t2)
-        header_row.add_widget(Widget())  # Spacer
+        header_row.add_widget(Widget())  
         
-        subtitle = Label(text=f"Developed by {DEVELOPER_NAME}", font_size=sp(14),
+        subtitle = Label(text=f"Developed by {DEVELOPER_NAME}", font_size=sp(15),
                          color=PURPLE_LIGHT, size_hint_y=None, height=dp(24), halign="center")
         
         title_box.add_widget(header_row)
         title_box.add_widget(subtitle)
         root.add_widget(title_box)
 
+        # Space before Instructions
+        root.add_widget(Widget(size_hint_y=None, height=dp(10)))
+
         # Instructions Label
         instructions = Label(
             text="Upload a file to start the quiz\nYou can turn On/Off the\nvoice assistant below",
-            font_size=sp(16), color=FG, size_hint_y=None, height=dp(72),
-            halign="center", valign="middle", line_height=1.25
+            font_size=sp(17), color=FG, size_hint_y=None, height=dp(80),
+            halign="center", valign="middle", line_height=1.3
         )
-        instructions.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
         root.add_widget(instructions)
 
         # Upload Button
-        self.upload_btn = PanelButton(text="Upload a file", bg_color=PURPLE, height=dp(54),
-                                      font_size=sp(18))
+        self.upload_btn = PanelButton(text="Upload a file", bg_color=PURPLE, height=dp(56), font_size=sp(19))
         self.upload_btn.bind(on_release=lambda *_: (
             App.get_running_app().play_swipe_sound(),
             App.get_running_app().browse_file()
@@ -546,11 +530,10 @@ class LandingScreen(VoiceNavMixin, Screen):
         root.add_widget(self.upload_btn)
 
         # Voice Toggle + Settings Gear Row
-        toggle_row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(12))
-        toggle_row.add_widget(Widget())  # Spacer
+        toggle_row = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(16))
+        toggle_row.add_widget(Widget())  
         
-        self.voice_btn = CapsuleButton(text="Voice Guidance On", size_hint_x=None, width=dp(200),
-                                       font_size=sp(14))
+        self.voice_btn = CapsuleButton(text="Voice Guidance On", size_hint_x=None, width=dp(220), font_size=sp(16))
         self.voice_btn.bind(on_release=lambda *_: (
             App.get_running_app().play_swipe_sound(),
             App.get_running_app().toggle_voice()
@@ -563,24 +546,22 @@ class LandingScreen(VoiceNavMixin, Screen):
             App.get_running_app().open_settings()
         ))
         toggle_row.add_widget(self.gear_btn)
-        toggle_row.add_widget(Widget())  # Spacer
+        toggle_row.add_widget(Widget())  
         root.add_widget(toggle_row)
 
-        self.status_label = Label(text="", font_size=sp(13), color=MUTED,
-                                  size_hint_y=None, height=dp(30))
+        self.status_label = Label(text="", font_size=sp(14), color=MUTED, size_hint_y=None, height=dp(20))
         root.add_widget(self.status_label)
 
         # "Your Previous Quizzes" Header with Line Separator
         prev_box = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(44), spacing=dp(6))
-        prev_title = Label(text="Your Previous Quizzes", font_size=sp(18), bold=True,
+        prev_title = Label(text="Your Previous Quizzes", font_size=sp(19), bold=True,
                            color=PINK_ACCENT, halign="center")
         prev_box.add_widget(prev_title)
         
-        # Rough Divider Line
         divider = Widget(size_hint_y=None, height=dp(2))
         with divider.canvas:
             Color(0.8, 0.8, 0.85, 0.4)
-            Line(points=[dp(20), divider.y, Window.width - dp(20), divider.y], width=dp(1))
+            Line(points=[dp(30), divider.y, Window.width - dp(30), divider.y], width=dp(1))
         prev_box.add_widget(divider)
         root.add_widget(prev_box)
 
@@ -610,7 +591,7 @@ class LandingScreen(VoiceNavMixin, Screen):
         ]
         if not history:
             self.history_list.add_widget(Label(
-                text="No previous quizzes yet.", color=MUTED, font_size=sp(13),
+                text="No previous quizzes found.", color=MUTED, font_size=sp(14),
                 size_hint_y=None, height=dp(32)
             ))
             self._set_voice_nav_items(base_items)
@@ -687,7 +668,7 @@ class CountSelectScreen(VoiceNavMixin, Screen):
 
 
 # ---------------------------------------------------------------------------
-# Quiz Screen (UI Matched to Reference Image 2)
+# Quiz Screen
 # ---------------------------------------------------------------------------
 class QuizScreen(VoiceNavMixin, Screen):
     def __init__(self, **kwargs):
@@ -697,7 +678,6 @@ class QuizScreen(VoiceNavMixin, Screen):
                          spacing=dp(12))
         self.add_widget(root)
 
-        # Header Row
         header = BoxLayout(size_hint_y=None, height=dp(44))
         self.progress_label = Label(text="", font_size=sp(18), bold=True, color=BLUE_ACCENT,
                                     halign="left", valign="middle")
@@ -707,7 +687,6 @@ class QuizScreen(VoiceNavMixin, Screen):
         header.add_widget(_bar)
         root.add_widget(header)
 
-        # Question Card Box (Gray Outlined Box matching Image 2)
         question_card = BoxLayout(padding=dp(16), size_hint=(1, 0.38))
         with question_card.canvas.before:
             Color(0.7, 0.7, 0.72, 1)
@@ -723,14 +702,12 @@ class QuizScreen(VoiceNavMixin, Screen):
         question_card.add_widget(q_scroller)
         root.add_widget(question_card)
 
-        # Options Container
         self.options_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(12))
         self.options_box.bind(minimum_height=self.options_box.setter("height"))
         opt_scroller = ScrollView(size_hint=(1, 1))
         opt_scroller.add_widget(self.options_box)
         root.add_widget(opt_scroller)
 
-        # Status & Explanation
         self.status_label = Label(text="", font_size=sp(14), bold=True, color=FG,
                                   size_hint_y=None, height=dp(0), halign="left", valign="top")
         self.status_label.bind(width=lambda w, *_: setattr(w, "text_size", (w.width, None)))
@@ -743,16 +720,11 @@ class QuizScreen(VoiceNavMixin, Screen):
         self.explanation_label.bind(texture_size=lambda w, *_: setattr(w, "height", w.texture_size[1] + dp(4)))
         root.add_widget(self.explanation_label)
 
-        # Save Offline + Next Question Buttons Row
         action_row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(10))
-        
-        self.save_btn = PanelButton(text="Save Offline", bg_color=PANEL_BG, size_hint_x=0.35,
-                                    font_size=sp(13))
+        self.save_btn = PanelButton(text="Save Offline", bg_color=PANEL_BG, size_hint_x=0.35, font_size=sp(13))
         self.save_btn.bind(on_release=guarded_release(lambda app: app.save_current_quiz_offline()))
         action_row.add_widget(self.save_btn)
-
-        self.next_btn = Label(text="Next Question", font_size=sp(16), color=MUTED,
-                              size_hint_x=0.65, halign="center", valign="middle")
+        self.next_btn = Label(text="Next Question", font_size=sp(16), color=MUTED, size_hint_x=0.65, halign="center", valign="middle")
         action_row.add_widget(self.next_btn)
         root.add_widget(action_row)
 
@@ -805,7 +777,6 @@ class QuizScreen(VoiceNavMixin, Screen):
             else:
                 self.explanation_label.text = ""
             
-            # Make Next Question tappable
             self.next_btn.text = "Finish Quiz >" if index == total - 1 else "Next Question >"
             self.next_btn.color = PURPLE_LIGHT
         else:
@@ -924,6 +895,10 @@ class LPTestApp(App):
     title = "LPTest"
 
     def build(self):
+        # Pre-initialize TTS so that it's ready on first click
+        if platform == "android":
+            _AndroidTTS._get_engine()
+
         self.questions: list[dict] = []
         self.user_answers: list = []
         self.current_index = 0
@@ -938,7 +913,6 @@ class LPTestApp(App):
         self._count_select_prompt = ""
         self._swipe_sound = None
 
-        # Pre-load sound effect
         try:
             self._swipe_sound = SoundLoader.load("swipe.wav")
         except Exception as e:
@@ -957,13 +931,10 @@ class LPTestApp(App):
         for s in (self.landing, self.count_select, self.quiz, self.summary):
             self.sm.add_widget(s)
 
-        Clock.schedule_once(lambda *_: self.speak(
-            "Welcome to LPTest. Tap Upload File to begin."
-        ), 1.0)
+        Clock.schedule_once(lambda *_: self.speak("Welcome to LPTest. Tap Upload File to begin."), 1.0)
         return self.sm
 
     def play_swipe_sound(self):
-        """Play swipe sound effect on interactions."""
         try:
             if self._swipe_sound is None:
                 self._swipe_sound = SoundLoader.load("swipe.wav")
@@ -1006,7 +977,6 @@ class LPTestApp(App):
             self.speak("Voice guidance on.")
 
     def open_settings(self):
-        """Settings Popup with TTS Engine Selector."""
         content = BoxLayout(orientation="vertical", spacing=dp(14), padding=dp(18))
         
         content.add_widget(Label(
@@ -1014,7 +984,6 @@ class LPTestApp(App):
             color=FG, size_hint_y=None, height=dp(28)
         ))
 
-        # 1. TTS Engine Selector
         content.add_widget(Label(text="Select Speech Engine (TTS):", font_size=sp(13),
                                  color=MUTED, size_hint_y=None, height=dp(20), halign="left"))
         
@@ -1038,7 +1007,6 @@ class LPTestApp(App):
         spinner.bind(text=on_engine_select)
         content.add_widget(spinner)
 
-        # 2. Speech Rate Slider
         content.add_widget(Label(text="Speech Speed Rate:", font_size=sp(13),
                                  color=MUTED, size_hint_y=None, height=dp(20), halign="left"))
         
@@ -1056,7 +1024,6 @@ class LPTestApp(App):
         slider.bind(value=on_change)
         content.add_widget(slider)
 
-        # 3. Actions
         test_btn = PanelButton(text="Test Voice", bg_color=PURPLE, font_size=sp(14), height=dp(44))
         test_btn.bind(on_release=lambda *_: self.speak("Testing voice guidance audio."))
         content.add_widget(test_btn)
@@ -1070,7 +1037,6 @@ class LPTestApp(App):
         self.speak("Settings opened. Choose TTS engine or adjust speech rate.")
 
     def save_current_quiz_offline(self):
-        """Requirement 1: Save/download set of questions for offline use."""
         if not self.questions:
             return
         try:
@@ -1159,7 +1125,7 @@ class LPTestApp(App):
         else:
             self.speak("Welcome to LPTest. Tap Upload File to begin.")
 
-    # -- File Loading (PDF, DOCX, TXT, JSON Offline) -----------------------
+    # -- File Loading (PDF, DOCX, TXT, JSON Offline) Fixed Request Code --------
     def browse_file(self):
         self.speak("Opening file picker.")
         if platform == "android":
@@ -1178,7 +1144,8 @@ class LPTestApp(App):
 
         if not hasattr(self, "_android_select_code"):
             import random
-            self._android_select_code = random.randint(100000, 999999)
+            # Fixed issue where code was > 65535, causing Intent crash!
+            self._android_select_code = random.randint(1000, 9999) 
             activity.bind(on_activity_result=self._android_on_activity_result)
 
         intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
@@ -1199,8 +1166,10 @@ class LPTestApp(App):
 
     def _android_copy_uri_to_temp(self, uri):
         try:
+            # Fixed: Safely import mActivity using jnius
             from jnius import autoclass
-            from android import mActivity
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            mActivity = PythonActivity.mActivity
 
             resolver = mActivity.getContentResolver()
             display_name = "uploaded_file"
@@ -1272,7 +1241,6 @@ class LPTestApp(App):
 
     def _load_file_now(self, path: str):
         try:
-            # Direct JSON Offline Quiz File handling
             if path.lower().endswith(".json"):
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
