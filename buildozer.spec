@@ -18,7 +18,7 @@ version = 1.0
 # build fails immediately with "python3 should have same version as
 # hostpython3". Unpinned "python3" resolves to whatever the newest
 # available release is (e.g. 3.14), which breaks other things too.
-requirements = python3==3.11.9,hostpython3==3.11.9,kivy==2.3.1,pypdf,plyer,pyjnius,reportlab,requests
+requirements = python3==3.11.9,hostpython3==3.11.9,kivy==2.3.1,pypdf,plyer,pyjnius,reportlab,requests,sh<2.0
 
 orientation = portrait
 fullscreen = 0
