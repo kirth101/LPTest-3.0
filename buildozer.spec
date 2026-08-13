@@ -14,17 +14,31 @@ version = 1.0
 # xml.etree.ElementTree) specifically to avoid lxml, whose Android build
 # recipe is broken (a real multi-day debugging saga -- see git history/
 # chat log if this gets reintroduced and breaks the build again).
+#
+# IMPORTANT -- do not add google-generativeai or google-genai here either:
+# question_generator.py's Gemini integration calls Google's REST API
+# directly via `requests` (already listed below) instead of either SDK.
+# `google-generativeai` is permanently deprecated by Google (Nov 30,
+# 2025) and no longer maintained; `google-genai`, the newer official
+# SDK, would pull in a chain of new pip dependencies (httpx, pydantic,
+# google-auth, websockets, ...) that have never been proven to
+# cross-compile under python-for-android -- exactly the kind of fragile
+# Android build risk this project already hit once with the freetype
+# recipe. Calling the REST API over plain `requests` needs nothing new
+# here at all.
+#
 # python3/hostpython3 MUST stay pinned to the same exact version, or the
 # build fails immediately with "python3 should have same version as
 # hostpython3". Unpinned "python3" resolves to whatever the newest
 # available release is (e.g. 3.14), which breaks other things too.
-requirements = python3==3.11.9,hostpython3==3.11.9,kivy==2.3.1,pypdf,plyer,pyjnius,reportlab,requests,sh<2.0
+requirements = python3==3.11.9,hostpython3==3.11.9,kivy==2.3.1,pypdf,plyer,pyjnius,reportlab,requests
 
 orientation = portrait
 fullscreen = 0
 
-# INTERNET: for the online quiz generator. VIBRATE: haptic feedback on
-# the swipe/double-tap accessibility gestures.
+# INTERNET: for the online quiz generator (Gemini, via requests) and
+# checking for online questions. VIBRATE: haptic feedback on the
+# swipe/double-tap accessibility gestures.
 android.permissions = INTERNET, VIBRATE
 
 android.minapi = 24
