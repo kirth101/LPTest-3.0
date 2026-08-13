@@ -44,12 +44,39 @@ jobs:
             ~/.gradle
           key: buildozer-${{ hashFiles('buildozer.spec') }}
 
+      # Build APK, with automatic retries around the whole step.
+      #
+      # WHY: buildozer/python-for-android downloads several C-library
+      # source tarballs (freetype, libffi, openssl, ...) from various
+      # third-party mirrors mid-build -- e.g. freetype comes from
+      # download.savannah.gnu.org, a GNU project server with a long,
+      # well-documented history of intermittent 502 Bad Gateway outages
+      # that have nothing to do with this repo's code. p4a already
+      # retries an individual download 4 times over ~15 seconds, which
+      # isn't long enough to ride out a real outage -- so when Savannah
+      # (or any other upstream mirror p4a reaches out to) is down for
+      # longer than that, the whole build fails outright.
+      #
+      # nick-fields/retry re-runs the ENTIRE step (not just one
+      # download) up to 3 times, 60 seconds apart, giving a flaky
+      # upstream server real time to recover instead of failing the
+      # whole workflow over what's usually a transient, self-resolving
+      # problem. buildozer/p4a's own caching (the actions/cache step
+      # above, plus p4a's own packages/ dir under ~/.buildozer) means a
+      # retry doesn't re-download things that already succeeded on the
+      # previous attempt -- only the step that actually failed partway
+      # through has to redo any real work.
       - name: Build APK
+        uses: nick-fields/retry@v3
         env:
           PIP_CONSTRAINT: ${{ github.workspace }}/pip-constraints.txt
-        run: |
-          echo "pip==24.0" > pip-constraints.txt
-          yes | buildozer -v android debug
+        with:
+          timeout_minutes: 45
+          max_attempts: 3
+          retry_wait_seconds: 60
+          command: |
+            echo "pip==24.0" > pip-constraints.txt
+            yes | buildozer -v android debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
