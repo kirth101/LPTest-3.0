@@ -459,7 +459,8 @@ class VoiceNavMixin:
 
             if abs(dx) > self._SWIPE_THRESHOLD and abs(dx) > abs(dy):
                 self._haptic(short=True)
-                self._voice_nav_move(1 if dx < 0 else -1)
+                # FIX: Right swipe (dx > 0) goes forward (+1), Left swipe (dx < 0) goes backward (-1)
+                self._voice_nav_move(1 if dx > 0 else -1)
                 self._swipe_start = None
                 return True
             else:
@@ -931,7 +932,8 @@ class LPTestApp(App):
         for s in (self.landing, self.count_select, self.quiz, self.summary):
             self.sm.add_widget(s)
 
-        Clock.schedule_once(lambda *_: self.speak("Welcome to LPTest. Tap Upload File to begin."), 1.0)
+        # FIX: Updated standard greeting to include Developer Name
+        Clock.schedule_once(lambda *_: self.speak("Welcome to LPTest. Developed by Direk Allan. Upload a file to start the quiz."), 1.0)
         return self.sm
 
     def play_swipe_sound(self):
@@ -977,7 +979,8 @@ class LPTestApp(App):
             self.speak("Voice guidance on.")
 
     def open_settings(self):
-        content = BoxLayout(orientation="vertical", spacing=dp(14), padding=dp(18))
+        # FIX: Change Standard BoxLayout to VoiceNavBoxLayout to enable voice guidance
+        content = VoiceNavBoxLayout(orientation="vertical", spacing=dp(14), padding=dp(18))
         
         content.add_widget(Label(
             text="Voice Guidance Settings", font_size=sp(16), bold=True,
@@ -1003,6 +1006,7 @@ class LPTestApp(App):
             self.selected_tts_engine = pkg
             _AndroidTTS.set_engine(pkg)
             self.speak(f"Engine changed to {text}")
+            update_settings_nav()
 
         spinner.bind(text=on_engine_select)
         content.add_widget(spinner)
@@ -1020,6 +1024,7 @@ class LPTestApp(App):
         def on_change(_slider, value):
             self.speech_rate = round(value, 1)
             rate_label.text = f"{self.speech_rate:.1f}x"
+            update_settings_nav()
 
         slider.bind(value=on_change)
         content.add_widget(slider)
@@ -1032,6 +1037,17 @@ class LPTestApp(App):
         close_btn = PanelButton(text="Close", bg_color=PANEL_BG, font_size=sp(14), height=dp(44))
         close_btn.bind(on_release=lambda *_: popup.dismiss())
         content.add_widget(close_btn)
+
+        # FIX: Populate the settings with voice nav items so the screen is readable
+        def update_settings_nav():
+            content._set_voice_nav_items([
+                (f"Select Speech Engine. Currently {spinner.text}", lambda: spinner.dispatch('on_release'), spinner),
+                (f"Speech speed rate. Currently {self.speech_rate:.1f}x", None, slider),
+                ("Test Voice button", lambda: self.speak("Testing voice guidance audio."), test_btn),
+                ("Close settings button", lambda: popup.dismiss(), close_btn)
+            ], reset_index=False)
+            
+        update_settings_nav()
 
         popup.open()
         self.speak("Settings opened. Choose TTS engine or adjust speech rate.")
@@ -1123,7 +1139,7 @@ class LPTestApp(App):
             correct = sum(1 for i, q in enumerate(self.questions) if self.user_answers[i] == q.get("correctIndex"))
             self.speak(f"Quiz complete. You scored {correct} out of {total}.")
         else:
-            self.speak("Welcome to LPTest. Tap Upload File to begin.")
+            self.speak("Welcome to LPTest. Developed by Direk Allan. Upload a file to start the quiz.")
 
     # -- File Loading (PDF, DOCX, TXT, JSON Offline) Fixed Request Code --------
     def browse_file(self):
