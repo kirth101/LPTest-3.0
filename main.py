@@ -1,6 +1,7 @@
 """
 LPTest (Kivy rebuild) — entry point with full UI matching, offline quiz save/load,
 custom TTS Engine selection, sound effects, and enhanced haptic touch feedback.
+[cite: 9]
 """
 from __future__ import annotations
 
@@ -1401,14 +1402,12 @@ class LPTestApp(App):
             self.current_quiz_filename = os.path.basename(path)
             note = (result.warning + "\n") if result.warning else ""
 
-            # 1. Subukin munang basahin kung may existing Q&A ang file (offline re-upload)
             existing = detect_existing_qa(result.text)
             if existing:
                 self.mode_note = note + "Using your file's own questions."
                 self.offer_count_select(existing)
                 return
 
-            # 2. Subukin ang Gemini Online Generator kung may API key
             if self.gemini_api_key:
                 self.landing.status_label.text = f"Generating questions with Gemini \u2026"
                 questions, err = generate_questions_with_gemini(result.text, self.gemini_api_key)
@@ -1417,7 +1416,6 @@ class LPTestApp(App):
                     self.offer_count_select(questions)
                     return
 
-            # 3. Offline Chunking & Fallback kung walang API key o walang net
             chunks = chunk_text(result.text, result.headings)
             questions, skipped = generate_questions_offline(chunks, result.text)
             if not questions:
