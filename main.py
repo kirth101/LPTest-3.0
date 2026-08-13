@@ -1,6 +1,7 @@
 """
 LPTest (Kivy rebuild) — entry point with full UI matching, offline quiz save/load,
 custom TTS Engine selection, sound effects, and enhanced haptic touch feedback.
+
 """
 from __future__ import annotations
 
@@ -136,17 +137,17 @@ class CapsuleButton(Button):
     pass
 
 class _RoundIconButton(ButtonBehavior, Widget):
-    bg_color = ListProperty(PURPLE_DARK)
+    bg_color = ListProperty(PURPLE)
 
     def __init__(self, **kwargs):
         kwargs.setdefault("size_hint", (None, None))
-        kwargs.setdefault("size", (dp(48), dp(48)))
+        kwargs.setdefault("size", (dp(44), dp(44)))
         super().__init__(**kwargs)
         with self.canvas.before:
             self._bg_color_instr = Color(rgba=self.bg_color)
             self._bg_ellipse = Ellipse(pos=self.pos, size=self.size)
         with self.canvas.after:
-            Color(0, 0, 0, 1) # Changed to black to match the reference design
+            Color(1, 1, 1, 1)
             self._lines = self._build_lines()
         self.bind(pos=self._redraw, size=self._redraw, bg_color=self._recolor)
         self._redraw()
@@ -163,9 +164,9 @@ class _RoundIconButton(ButtonBehavior, Widget):
 
 class HomeIconButton(_RoundIconButton):
     def _build_lines(self):
-        self._roof = Line(width=dp(2.5), cap="round", joint="round")
-        self._base = Line(width=dp(2.5), cap="round", joint="round")
-        self._door = Line(width=dp(2.5), cap="round", joint="round")
+        self._roof = Line(width=dp(1.8), cap="round", joint="round")
+        self._base = Line(width=dp(1.8), cap="round", joint="round")
+        self._door = Line(width=dp(1.5), cap="round", joint="round")
         return [self._roof, self._base, self._door]
 
     def _redraw(self, *_a):
@@ -184,9 +185,9 @@ class HomeIconButton(_RoundIconButton):
 
 class SpeakIconButton(_RoundIconButton):
     def _build_lines(self):
-        self._body = Line(width=dp(2.5), cap="round", joint="round", close=True)
-        self._wave1 = Line(width=dp(2.5), cap="round")
-        self._wave2 = Line(width=dp(2.5), cap="round")
+        self._body = Line(width=dp(1.8), cap="round", joint="round", close=True)
+        self._wave1 = Line(width=dp(1.5), cap="round")
+        self._wave2 = Line(width=dp(1.5), cap="round")
         return [self._body, self._wave1, self._wave2]
 
     def _redraw(self, *_a):
@@ -355,8 +356,8 @@ def guarded_release(action):
     return handler
 
 def build_icon_bar(show_home: bool = True):
-    width = dp(48) * (2 if show_home else 1) + (dp(8) if show_home else 0)
-    bar = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint=(None, None), size=(width, dp(48)))
+    width = dp(44) * (2 if show_home else 1) + (dp(8) if show_home else 0)
+    bar = BoxLayout(orientation="horizontal", spacing=dp(8), size_hint=(None, None), size=(width, dp(44)))
     home_btn = None
     if show_home:
         home_btn = HomeIconButton()
@@ -716,8 +717,10 @@ class QuizScreen(VoiceNavMixin, Screen):
         self.explanation_label.bind(texture_size=lambda w, *_: setattr(w, "height", w.texture_size[1] + dp(4)))
         root.add_widget(self.explanation_label)
 
-        action_row = BoxLayout(size_hint_y=None, height=dp(54), spacing=dp(10))
-        self.next_btn = PanelButton(text="Next Question", bg_color=(0.4, 0.05, 0.85, 1), font_size=sp(20))
+        action_row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(10))
+        self.next_btn = Button(text="Next Question", font_size=sp(16), color=MUTED,
+                               background_normal="", background_down="", background_color=(0, 0, 0, 0),
+                               size_hint_x=1.0, halign="center", valign="middle")
         self.next_btn.bind(on_release=lambda *_: App.get_running_app().next_question())
         action_row.add_widget(self.next_btn)
         root.add_widget(action_row)
@@ -773,11 +776,15 @@ class QuizScreen(VoiceNavMixin, Screen):
                 explanation_text = f"The correct choice is {letters[correct_idx] if correct_idx is not None else ''} {correct_opt_text}. This is based on the key concepts covered in the test material."
             self.explanation_label.text = f"Explanation: {explanation_text}"
             
-            self.next_btn.text = "Finish Quiz" if index == total - 1 else "Next Question"
+            self.next_btn.text = "Finish Quiz >" if index == total - 1 else "Next Question >"
+            self.next_btn.color = PURPLE_LIGHT
+            self.next_btn.bold = True
         else:
             self.status_label.text = ""
             self.explanation_label.text = ""
             self.next_btn.text = "Next Question"
+            self.next_btn.color = MUTED
+            self.next_btn.bold = False
 
         app = App.get_running_app()
         if not locked:
@@ -954,6 +961,7 @@ class LPTestApp(App):
             pass
 
     def force_repeat_current(self):
+        """Pinipilit basahin ang kasalukuyang tanong o paliwanag kahit naka-off ang voice guidance."""
         old_val = self.voice_enabled
         self.voice_enabled = True
         self.repeat_current()
@@ -1270,9 +1278,11 @@ class LPTestApp(App):
 
     def _android_pick_file(self):
         from jnius import autoclass
-        from android import activity, mActivity
+        from android import activity
 
         Intent = autoclass("android.content.Intent")
+        PythonActivity = autoclass("org.kivy.android.PythonActivity")
+        mActivity = PythonActivity.mActivity
 
         if not hasattr(self, "_android_select_code"):
             import random
