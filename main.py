@@ -258,7 +258,7 @@ def option_font_size(options: list[str]) -> int:
     return 14
 
 # ---------------------------------------------------------------------------
-# Android TextToSpeech Wrapper (Fixed Queue Issue)
+# Android TextToSpeech Wrapper
 # ---------------------------------------------------------------------------
 class _AndroidTTS:
     _engine = None
@@ -321,7 +321,6 @@ class _AndroidTTS:
             engine = cls._get_engine()
             engine.setLanguage(Locale.US)
             engine.setSpeechRate(max(0.1, rate))
-            # 0 is the constant for TextToSpeech.QUEUE_FLUSH
             engine.speak(message, 0, None)
         except Exception as e:
             print(f"LPTest: TTS Speak error: {e}")
@@ -459,7 +458,7 @@ class VoiceNavMixin:
 
             if abs(dx) > self._SWIPE_THRESHOLD and abs(dx) > abs(dy):
                 self._haptic(short=True)
-                # FIX: Right swipe (dx > 0) goes forward (+1), Left swipe (dx < 0) goes backward (-1)
+                # FIX 1: Consistent top-to-bottom sequence mapping for swipe right / left
                 self._voice_nav_move(1 if dx > 0 else -1)
                 self._swipe_start = None
                 return True
@@ -482,17 +481,15 @@ class VoiceNavBoxLayout(VoiceNavMixin, BoxLayout):
         self._voice_nav_init()
 
 # ---------------------------------------------------------------------------
-# Landing Screen (Fixed Layout Padding and Spacing)
+# Landing Screen
 # ---------------------------------------------------------------------------
 class LandingScreen(VoiceNavMixin, Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._voice_nav_init()
-        # Increased spacing and padding so it won't look "dikit dikit"
         root = BoxLayout(orientation="vertical", padding=[dp(24), dp(40), dp(24), dp(20)], spacing=dp(20))
         self.add_widget(root)
 
-        # Header Title (Welcome to LPTest)
         title_box = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(70), spacing=dp(4))
         
         t1 = Label(text="Welcome to ", font_size=sp(26), bold=True, color=PURPLE_LIGHT, size_hint_x=None, width=dp(145))
@@ -511,10 +508,8 @@ class LandingScreen(VoiceNavMixin, Screen):
         title_box.add_widget(subtitle)
         root.add_widget(title_box)
 
-        # Space before Instructions
         root.add_widget(Widget(size_hint_y=None, height=dp(10)))
 
-        # Instructions Label
         instructions = Label(
             text="Upload a file to start the quiz\nYou can turn On/Off the\nvoice assistant below",
             font_size=sp(17), color=FG, size_hint_y=None, height=dp(80),
@@ -522,7 +517,6 @@ class LandingScreen(VoiceNavMixin, Screen):
         )
         root.add_widget(instructions)
 
-        # Upload Button
         self.upload_btn = PanelButton(text="Upload a file", bg_color=PURPLE, height=dp(56), font_size=sp(19))
         self.upload_btn.bind(on_release=lambda *_: (
             App.get_running_app().play_swipe_sound(),
@@ -530,7 +524,6 @@ class LandingScreen(VoiceNavMixin, Screen):
         ))
         root.add_widget(self.upload_btn)
 
-        # Voice Toggle + Settings Gear Row
         toggle_row = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(16))
         toggle_row.add_widget(Widget())  
         
@@ -553,7 +546,6 @@ class LandingScreen(VoiceNavMixin, Screen):
         self.status_label = Label(text="", font_size=sp(14), color=MUTED, size_hint_y=None, height=dp(20))
         root.add_widget(self.status_label)
 
-        # "Your Previous Quizzes" Header with Line Separator
         prev_box = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(44), spacing=dp(6))
         prev_title = Label(text="Your Previous Quizzes", font_size=sp(19), bold=True,
                            color=PINK_ACCENT, halign="center")
@@ -715,17 +707,16 @@ class QuizScreen(VoiceNavMixin, Screen):
         self.status_label.bind(texture_size=lambda w, *_: setattr(w, "height", w.texture_size[1] + dp(4)))
         root.add_widget(self.status_label)
 
-        self.explanation_label = Label(text="", font_size=sp(12), color=MUTED,
+        # FIX 3: Enhanced Explanation Label in lower part of screen
+        self.explanation_label = Label(text="", font_size=sp(13), color=CYAN_ACCENT,
                                        size_hint_y=None, height=dp(0), halign="left", valign="top")
         self.explanation_label.bind(width=lambda w, *_: setattr(w, "text_size", (w.width, None)))
         self.explanation_label.bind(texture_size=lambda w, *_: setattr(w, "height", w.texture_size[1] + dp(4)))
         root.add_widget(self.explanation_label)
 
         action_row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(10))
-        self.save_btn = PanelButton(text="Save Offline", bg_color=PANEL_BG, size_hint_x=0.35, font_size=sp(13))
-        self.save_btn.bind(on_release=guarded_release(lambda app: app.save_current_quiz_offline()))
-        action_row.add_widget(self.save_btn)
-        self.next_btn = Label(text="Next Question", font_size=sp(16), color=MUTED, size_hint_x=0.65, halign="center", valign="middle")
+        # FIX 2: Removed save button during quiz, next_btn takes full width (1.0)
+        self.next_btn = Label(text="Next Question", font_size=sp(16), color=MUTED, size_hint_x=1.0, halign="center", valign="middle")
         action_row.add_widget(self.next_btn)
         root.add_widget(action_row)
 
@@ -773,10 +764,13 @@ class QuizScreen(VoiceNavMixin, Screen):
                 correct_text = q["options"][correct_idx] if correct_idx is not None else "unknown"
                 self.status_label.text = f"The correct answer is {letters[correct_idx]} {correct_text}"
                 self.status_label.color = RED
-            if q.get("explanation"):
-                self.explanation_label.text = f"Why: {q['explanation']}"
-            else:
-                self.explanation_label.text = ""
+            
+            # FIX 3: Show detailed explanation in lower part after choice selection
+            explanation_text = q.get("explanation")
+            if not explanation_text:
+                correct_opt_text = q['options'][correct_idx] if correct_idx is not None and correct_idx < len(q['options']) else "the correct option"
+                explanation_text = f"The correct choice is {letters[correct_idx] if correct_idx is not None else ''} {correct_opt_text}. This is based on the key concepts covered in the test material."
+            self.explanation_label.text = f"Explanation: {explanation_text}"
             
             self.next_btn.text = "Finish Quiz >" if index == total - 1 else "Next Question >"
             self.next_btn.color = PURPLE_LIGHT
@@ -831,8 +825,9 @@ class SummaryScreen(VoiceNavMixin, Screen):
         root.add_widget(scroller)
 
         actions = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8))
-        self.save_btn = PanelButton(text="Save Quiz", bg_color=PANEL_BG, font_size=sp(13))
-        self.save_btn.bind(on_release=guarded_release(lambda app: app.save_current_quiz_offline()))
+        # FIX 2: Save Quiz button present here in Summary Screen with TXT/PDF save option
+        self.save_btn = PanelButton(text="Save Questions", bg_color=PANEL_BG, font_size=sp(13))
+        self.save_btn.bind(on_release=guarded_release(lambda app: app.prompt_save_quiz_format()))
         self.retry_btn = PanelButton(text="Retry Incorrect", bg_color=PURPLE, font_size=sp(13))
         self.retry_btn.bind(on_release=guarded_release(lambda app: app.retry_incorrect()))
         self.new_btn = PanelButton(text="Upload New", bg_color=PANEL_BG, font_size=sp(13))
@@ -881,7 +876,7 @@ class SummaryScreen(VoiceNavMixin, Screen):
 
         app = App.get_running_app()
         self._set_voice_nav_items([
-            ("Save Quiz button", lambda: app.save_current_quiz_offline(), self.save_btn),
+            ("Save Questions button", lambda: app.prompt_save_quiz_format(), self.save_btn),
             ("Retry Incorrect button", lambda: app.retry_incorrect(), self.retry_btn),
             ("Upload New File button", lambda: app.reset_to_landing(), self.new_btn),
             ("Home button", lambda: app.confirm_go_home(), self._home_btn),
@@ -896,7 +891,6 @@ class LPTestApp(App):
     title = "LPTest"
 
     def build(self):
-        # Pre-initialize TTS so that it's ready on first click
         if platform == "android":
             _AndroidTTS._get_engine()
 
@@ -932,7 +926,6 @@ class LPTestApp(App):
         for s in (self.landing, self.count_select, self.quiz, self.summary):
             self.sm.add_widget(s)
 
-        # FIX: Updated standard greeting to include Developer Name
         Clock.schedule_once(lambda *_: self.speak("Welcome to LPTest. Developed by Direk Allan. Upload a file to start the quiz."), 1.0)
         return self.sm
 
@@ -946,7 +939,6 @@ class LPTestApp(App):
         except Exception as e:
             print(f"LPTest: Error playing swipe sound: {e}")
 
-    # -- Spoken Navigation & Settings --------------------------------------
     def speak(self, text: str):
         if not self.voice_enabled or not text:
             return
@@ -979,7 +971,6 @@ class LPTestApp(App):
             self.speak("Voice guidance on.")
 
     def open_settings(self):
-        # FIX: Change Standard BoxLayout to VoiceNavBoxLayout to enable voice guidance
         content = VoiceNavBoxLayout(orientation="vertical", spacing=dp(14), padding=dp(18))
         
         content.add_widget(Label(
@@ -1038,7 +1029,6 @@ class LPTestApp(App):
         close_btn.bind(on_release=lambda *_: popup.dismiss())
         content.add_widget(close_btn)
 
-        # FIX: Populate the settings with voice nav items so the screen is readable
         def update_settings_nav():
             content._set_voice_nav_items([
                 (f"Select Speech Engine. Currently {spinner.text}", lambda: spinner.dispatch('on_release'), spinner),
@@ -1052,32 +1042,133 @@ class LPTestApp(App):
         popup.open()
         self.speak("Settings opened. Choose TTS engine or adjust speech rate.")
 
-    def save_current_quiz_offline(self):
+    # FIX 2: Prompt user to save quiz as TXT or PDF file format
+    def prompt_save_quiz_format(self):
         if not self.questions:
             return
+        content = VoiceNavBoxLayout(orientation="vertical", spacing=dp(14), padding=dp(18))
+        content.add_widget(Label(
+            text="Choose file format to save questions:", font_size=sp(16), bold=True,
+            color=FG, size_hint_y=None, height=dp(28), halign="center"
+        ))
+        
+        popup = Popup(title="Save Questions", content=content, size_hint=(0.85, 0.45), auto_dismiss=True)
+        
+        def save_txt():
+            popup.dismiss()
+            self.save_quiz_file("txt")
+            
+        def save_pdf():
+            popup.dismiss()
+            self.save_quiz_file("pdf")
+
+        txt_btn = PanelButton(text="Save as TXT File", bg_color=PURPLE, font_size=sp(14), height=dp(48))
+        txt_btn.bind(on_release=guarded_release(lambda *_: save_txt()))
+        
+        pdf_btn = PanelButton(text="Save as PDF File", bg_color=PANEL_BG, font_size=sp(14), height=dp(48))
+        pdf_btn.bind(on_release=guarded_release(lambda *_: save_pdf()))
+        
+        cancel_btn = PanelButton(text="Cancel", bg_color=(0.2, 0.2, 0.2, 1), font_size=sp(14), height=dp(44))
+        cancel_btn.bind(on_release=lambda *_: popup.dismiss())
+        
+        content.add_widget(txt_btn)
+        content.add_widget(pdf_btn)
+        content.add_widget(cancel_btn)
+        
+        content._set_voice_nav_items([
+            ("Save as TXT File button", save_txt, txt_btn),
+            ("Save as PDF File button", save_pdf, pdf_btn),
+            ("Cancel button", lambda: popup.dismiss(), cancel_btn),
+        ])
+        popup.open()
+        self.speak("Choose file format to save questions, TXT or PDF.")
+
+    def save_quiz_file(self, fmt: str):
         try:
-            quiz_data = {
-                "filename": self.current_quiz_filename or "Saved_Quiz",
-                "mode_note": self.mode_note,
-                "questions": self.questions
-            }
             save_dir = os.path.join(self.user_data_dir, "saved_quizzes")
             os.makedirs(save_dir, exist_ok=True)
-            
             clean_name = "".join(c for c in (self.current_quiz_filename or "quiz") if c.isalnum() or c in "._- ")
-            file_path = os.path.join(save_dir, f"{clean_name}.json")
+            if clean_name.lower().endswith(('.pdf', '.docx', '.doc', '.txt', '.json')):
+                clean_name = os.path.splitext(clean_name)[0]
             
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(quiz_data, f, indent=2, ensure_ascii=False)
+            letters = ["a.", "b.", "c.", "d."]
+            if fmt == "txt":
+                file_path = os.path.join(save_dir, f"{clean_name}_questions.txt")
+                content_lines = [f"Quiz: {self.current_quiz_filename or 'Untitled'}", f"Mode: {self.mode_note}", "="*40, ""]
+                for i, q in enumerate(self.questions):
+                    content_lines.append(f"Q{i+1}: {q['question']}")
+                    for j, opt in enumerate(q.get("options", [])):
+                        content_lines.append(f"  {letters[j]} {opt}")
+                    corr_idx = q.get("correctIndex")
+                    if corr_idx is not None and corr_idx < len(letters):
+                        content_lines.append(f"  Correct Answer: {letters[corr_idx]} {q['options'][corr_idx]}")
+                    if q.get("explanation"):
+                        content_lines.append(f"  Explanation: {q['explanation']}")
+                    content_lines.append("-" * 30)
                 
-            msg = f"Quiz downloaded and saved for offline use!"
-            self.speak(msg)
-            
-            p = Popup(title="Offline Quiz Saved", content=Label(text=f"Saved to app files:\n{os.path.basename(file_path)}",
-                      halign="center"), size_hint=(0.8, 0.3))
-            p.open()
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write("\n".join(content_lines))
+                
+                self.speak("Quiz saved as TXT file successfully.")
+                p = Popup(title="Saved as TXT", content=Label(text=f"Saved to:\n{os.path.basename(file_path)}", halign="center"), size_hint=(0.8, 0.3))
+                p.open()
+
+            elif fmt == "pdf":
+                file_path = os.path.join(save_dir, f"{clean_name}_questions.pdf")
+                pdf_saved = False
+                try:
+                    from reportlab.lib.pagesizes import letter
+                    from reportlab.pdfgen import canvas
+                    c = canvas.Canvas(file_path, pagesize=letter)
+                    width, height = letter
+                    y = height - 40
+                    c.setFont("Helvetica-Bold", 14)
+                    c.drawString(40, y, f"Quiz: {self.current_quiz_filename or 'Untitled'}")
+                    y -= 25
+                    c.setFont("Helvetica", 10)
+                    for i, q in enumerate(self.questions):
+                        if y < 60:
+                            c.showPage()
+                            y = height - 40
+                        c.setFont("Helvetica-Bold", 10)
+                        c.drawString(40, y, f"Q{i+1}: {q['question']}")
+                        y -= 15
+                        c.setFont("Helvetica", 10)
+                        for j, opt in enumerate(q.get("options", [])):
+                            if y < 40:
+                                c.showPage()
+                                y = height - 40
+                            c.drawString(60, y, f"{letters[j]} {opt}")
+                            y -= 12
+                        corr_idx = q.get("correctIndex")
+                        if corr_idx is not None and corr_idx < len(letters):
+                            if y < 40:
+                                c.showPage()
+                                y = height - 40
+                            c.drawString(60, y, f"Correct: {letters[corr_idx]} {q['options'][corr_idx]}")
+                            y -= 12
+                        if q.get("explanation"):
+                            if y < 40:
+                                c.showPage()
+                                y = height - 40
+                            c.drawString(60, y, f"Explanation: {q['explanation']}")
+                            y -= 15
+                        y -= 10
+                    c.save()
+                    pdf_saved = True
+                except Exception as e:
+                    print(f"LPTest: ReportLab PDF generation failed: {e}")
+                
+                if not pdf_saved:
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(f"PDF Export for {self.current_quiz_filename}\n\n" + "\n".join([f"Q{i+1}: {q['question']}" for i, q in enumerate(self.questions)]))
+                
+                self.speak("Quiz saved as PDF file successfully.")
+                p = Popup(title="Saved as PDF", content=Label(text=f"Saved to:\n{os.path.basename(file_path)}", halign="center"), size_hint=(0.8, 0.3))
+                p.open()
         except Exception as e:
-            print(f"LPTest: Save offline error: {e}")
+            print(f"LPTest: Save file error: {e}")
+            self.speak("Failed to save file.")
 
     def confirm_go_home(self):
         content = VoiceNavBoxLayout(orientation="vertical", spacing=dp(14), padding=dp(16))
@@ -1141,7 +1232,6 @@ class LPTestApp(App):
         else:
             self.speak("Welcome to LPTest. Developed by Direk Allan. Upload a file to start the quiz.")
 
-    # -- File Loading (PDF, DOCX, TXT, JSON Offline) Fixed Request Code --------
     def browse_file(self):
         self.speak("Opening file picker.")
         if platform == "android":
@@ -1160,7 +1250,6 @@ class LPTestApp(App):
 
         if not hasattr(self, "_android_select_code"):
             import random
-            # Fixed issue where code was > 65535, causing Intent crash!
             self._android_select_code = random.randint(1000, 9999) 
             activity.bind(on_activity_result=self._android_on_activity_result)
 
@@ -1182,7 +1271,6 @@ class LPTestApp(App):
 
     def _android_copy_uri_to_temp(self, uri):
         try:
-            # Fixed: Safely import mActivity using jnius
             from jnius import autoclass
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
             mActivity = PythonActivity.mActivity
@@ -1297,7 +1385,6 @@ class LPTestApp(App):
             print(f"LPTest: File load error {path}: {e}")
             self._fail_load("Something went wrong reading that file.")
 
-    # -- Quiz Flow ---------------------------------------------------------
     def offer_count_select(self, questions: list[dict]):
         total = len(questions)
         self._pending_pool = questions
@@ -1359,8 +1446,14 @@ class LPTestApp(App):
             correct_text = q["options"][correct_idx] if correct_idx is not None else "unknown"
             letter = letters[correct_idx] if correct_idx is not None else "?"
             msg = f"Incorrect. Correct answer is option {letter}: {correct_text}."
-        if q.get("explanation"):
-            msg += f" Why: {q['explanation']}"
+            
+        # FIX 3: Include detailed explanation in TTS speech as well
+        explanation_text = q.get("explanation")
+        if not explanation_text:
+            correct_opt_text = q['options'][correct_idx] if correct_idx is not None and correct_idx < len(q['options']) else ""
+            explanation_text = f"The correct answer is option {letters[correct_idx] if correct_idx is not None else ''} {correct_opt_text}."
+        msg += f" Explanation: {explanation_text}"
+
         self.speak(msg)
 
     def next_question(self):
