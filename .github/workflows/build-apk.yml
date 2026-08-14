@@ -61,15 +61,32 @@ jobs:
           else:
               print('No bundled reportlab recipe found -- nothing to do.')
           "
-          # Also remove any local override recipe for reportlab (e.g.
-          # p4a-recipes/reportlab) -- a custom recipe pointing at
+          # Also remove any local recipe that registers itself as
+          # "reportlab" regardless of what its containing folder is
+          # named (a plain `rm -rf p4a-recipes/reportlab` only catches
+          # a folder literally named that, and evidently isn't
+          # catching the actual one) -- a custom recipe pointing at
           # hg.reportlab.com's archive URL 404s (that server doesn't
           # serve tagged-version archives at that path), and per p4a's
           # own docs, a pure-Python package like reportlab needs NO
           # recipe at all -- it installs automatically via pip once
           # neither the bundled nor a local recipe exists for it.
-          rm -rf p4a-recipes/reportlab
-          echo "Removed any local reportlab recipe override (if present)."
+          python -c "
+          import os, re, shutil
+          base = 'p4a-recipes'
+          if os.path.isdir(base):
+              for entry in sorted(os.listdir(base)):
+                  path = os.path.join(base, entry)
+                  init_file = os.path.join(path, '__init__.py')
+                  if not os.path.isfile(init_file):
+                      continue
+                  with open(init_file, 'r', errors='ignore') as f:
+                      content = f.read()
+                  if re.search(r'name\s*=\s*[\'\"]reportlab[\'\"]', content):
+                      shutil.rmtree(path)
+                      print(f'Removed local recipe registered as reportlab: {path}')
+          "
+          echo "Checked for local reportlab recipe overrides."
 
       - name: Cache buildozer / Android SDK-NDK
         uses: actions/cache@v4
