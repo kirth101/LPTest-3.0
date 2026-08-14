@@ -83,7 +83,8 @@ jobs:
       # and stay fast.
       - name: Clear any stale pyjnius/reportlab/pillow build state from cache
         run: |
-          find .buildozer -iregex ".*/other_builds/\(pyjnius\|reportlab\|pillow\).*" -exec rm -rf {} + 2>/dev/null
+          mkdir -p .buildozer
+          find .buildozer -iregex ".*/other_builds/\(pyjnius\|reportlab\|pillow\).*" -exec rm -rf {} + 2>/dev/null || true
           echo "done"
 
       # Build APK, with automatic retries around the whole step.
@@ -120,7 +121,8 @@ jobs:
           max_attempts: 5
           retry_wait_seconds: 90
           on_retry_command: |
-            find .buildozer -iregex ".*/other_builds/\(pyjnius\|reportlab\|pillow\).*" -exec rm -rf {} + 2>/dev/null
+            mkdir -p .buildozer
+            find .buildozer -iregex ".*/other_builds/\(pyjnius\|reportlab\|pillow\).*" -exec rm -rf {} + 2>/dev/null || true
             echo "Cleaned partial pyjnius/reportlab/pillow build state before retrying."
           command: |
             echo "pip==24.0" > pip-constraints.txt
