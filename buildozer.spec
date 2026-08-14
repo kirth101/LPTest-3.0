@@ -27,11 +27,34 @@ version = 1.0
 # recipe. Calling the REST API over plain `requests` needs nothing new
 # here at all.
 #
+# IMPORTANT -- reportlab: python-for-android's OWN bundled "reportlab"
+# recipe tries to compile reportlab's optional C accelerators, which
+# is fundamentally broken under Python 3.11+ (confirmed upstream bug,
+# kivy/python-for-android#2782 -- PyFrameObject/struct _frame became
+# opaque in CPython 3.11, and reportlab's old accelerator code still
+# pokes at its previous internal layout). build-apk.yml deletes that
+# bundled recipe before building, which makes p4a fall back to a
+# plain `pip install reportlab` instead -- reportlab's own setup.py
+# correctly treats those C accelerators as optional and skips a
+# failed one rather than aborting the whole install, unlike p4a's
+# dedicated recipe. Don't remove that build-apk.yml step without
+# putting some other fix in its place, or this will start failing the
+# same way again.
+#
 # python3/hostpython3 MUST stay pinned to the same exact version, or the
 # build fails immediately with "python3 should have same version as
 # hostpython3". Unpinned "python3" resolves to whatever the newest
 # available release is (e.g. 3.14), which breaks other things too.
-requirements = python3==3.11.9,hostpython3==3.11.9,kivy==2.3.1,pypdf,plyer,pyjnius,reportlab,requests
+#
+# IMPORTANT -- pillow is included here because of the reportlab fix
+# below: with p4a's own reportlab recipe removed (see
+# build-apk.yml's "Remove python-for-android's broken bundled
+# reportlab recipe" step), reportlab installs as a plain pip package
+# instead, and its optional image-handling needs Pillow available
+# directly rather than picking it up implicitly the way the recipe
+# build did. This mirrors the community-confirmed working fix in
+# kivy/python-for-android#2782.
+requirements = python3==3.11.9,hostpython3==3.11.9,kivy==2.3.1,pypdf,plyer,pyjnius,reportlab,pillow,requests
 
 orientation = portrait
 fullscreen = 0
