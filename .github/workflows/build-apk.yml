@@ -61,6 +61,15 @@ jobs:
           else:
               print('No bundled reportlab recipe found -- nothing to do.')
           "
+          # Also remove any local override recipe for reportlab (e.g.
+          # p4a-recipes/reportlab) -- a custom recipe pointing at
+          # hg.reportlab.com's archive URL 404s (that server doesn't
+          # serve tagged-version archives at that path), and per p4a's
+          # own docs, a pure-Python package like reportlab needs NO
+          # recipe at all -- it installs automatically via pip once
+          # neither the bundled nor a local recipe exists for it.
+          rm -rf p4a-recipes/reportlab
+          echo "Removed any local reportlab recipe override (if present)."
 
       - name: Cache buildozer / Android SDK-NDK
         uses: actions/cache@v4
