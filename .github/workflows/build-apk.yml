@@ -36,6 +36,32 @@ jobs:
           pip install --upgrade pip
           pip install buildozer==1.5.0 cython==0.29.36 python-for-android==2024.1.21
 
+      # python-for-android bundles its OWN "reportlab" recipe, which
+      # tries to compile reportlab's optional _rl_accel/_renderPM C
+      # accelerators from source -- and that compile is fundamentally
+      # broken under Python 3.11+ (CPython made PyFrameObject/struct
+      # _frame opaque; _rl_accel.c still pokes at its old internal
+      # layout directly). This is a known, confirmed, upstream p4a bug
+      # (kivy/python-for-android#2782) -- not something version-pinning
+      # or retrying fixes, since it's a genuine, deterministic compile
+      # error every time. The community-verified fix (confirmed working
+      # by the issue reporter): delete p4a's bundled reportlab recipe so
+      # p4a has no choice but to fall back to a plain `pip install
+      # reportlab` -- reportlab's own setup.py treats these C
+      # accelerators as optional and gracefully skips a failed one
+      # instead of aborting, which p4a's dedicated recipe does not do.
+      - name: Remove python-for-android's broken bundled reportlab recipe
+        run: |
+          python -c "
+          import os, shutil, pythonforandroid
+          recipe_dir = os.path.join(os.path.dirname(pythonforandroid.__file__), 'recipes', 'reportlab')
+          if os.path.isdir(recipe_dir):
+              shutil.rmtree(recipe_dir)
+              print(f'Removed broken bundled reportlab recipe: {recipe_dir}')
+          else:
+              print('No bundled reportlab recipe found -- nothing to do.')
+          "
+
       - name: Cache buildozer / Android SDK-NDK
         uses: actions/cache@v4
         with:
@@ -46,26 +72,30 @@ jobs:
 
       # Build APK, with automatic retries around the whole step.
       #
-      # WHY: buildozer/python-for-android downloads several C-library
-      # source tarballs (freetype, libffi, openssl, ...) from various
-      # third-party mirrors mid-build -- e.g. freetype comes from
-      # download.savannah.gnu.org, a GNU project server with a long,
-      # well-documented history of intermittent 502 Bad Gateway outages
-      # that have nothing to do with this repo's code. p4a already
-      # retries an individual download 4 times over ~15 seconds, which
-      # isn't long enough to ride out a real outage -- so when Savannah
-      # (or any other upstream mirror p4a reaches out to) is down for
-      # longer than that, the whole build fails outright.
+      # WHY RETRY AT ALL: buildozer/python-for-android downloads several
+      # C-library source tarballs (freetype, libffi, openssl, ...) from
+      # various third-party mirrors mid-build, and also resolves pip
+      # packages (like pyjnius) from PyPI -- both are outside this
+      # repo's control and occasionally return transient errors (502s,
+      # "from versions: none" on an otherwise-real release, timeouts)
+      # that have nothing to do with this repo's code and usually
+      # resolve themselves within a minute or two.
       #
-      # nick-fields/retry re-runs the ENTIRE step (not just one
-      # download) up to 3 times, 60 seconds apart, giving a flaky
-      # upstream server real time to recover instead of failing the
-      # whole workflow over what's usually a transient, self-resolving
-      # problem. buildozer/p4a's own caching (the actions/cache step
-      # above, plus p4a's own packages/ dir under ~/.buildozer) means a
-      # retry doesn't re-download things that already succeeded on the
-      # previous attempt -- only the step that actually failed partway
-      # through has to redo any real work.
+      # WHY on_retry_command: a failed attempt can leave p4a's OWN build
+      # state (under .buildozer/.../other_builds/<recipe>/) partially
+      # written -- re-running the same build command against that
+      # half-finished state doesn't just retry the thing that failed, it
+      # can fail in a DIFFERENT, unrelated way on the next attempt
+      # (seen in practice: attempt 1 failed on a real pyjnius/reportlab
+      # problem, but attempts 2 and 3 then failed immediately with an
+      # unrelated "'NoneType' object has no attribute 'pip'" crash,
+      # because they inherited attempt 1's half-built state instead of
+      # starting clean). on_retry_command runs BEFORE each retry and
+      # wipes out just the pyjnius/reportlab build directories -- not
+      # the whole .buildozer cache -- so each retry gets a genuinely
+      # clean shot at the parts that broke, while NDK/SDK/freetype/etc.
+      # from a successful earlier stage stay cached and don't get
+      # re-downloaded.
       - name: Build APK
         uses: nick-fields/retry@v3
         env:
@@ -74,6 +104,10 @@ jobs:
           timeout_minutes: 45
           max_attempts: 3
           retry_wait_seconds: 60
+          on_retry_command: |
+            find .buildozer -type d -path "*/other_builds/pyjnius*" -exec rm -rf {} + 2>/dev/null
+            find .buildozer -type d -path "*/other_builds/reportlab*" -exec rm -rf {} + 2>/dev/null
+            echo "Cleaned partial pyjnius/reportlab build state before retrying."
           command: |
             echo "pip==24.0" > pip-constraints.txt
             yes | buildozer -v android debug
