@@ -68,46 +68,60 @@ jobs:
           path: |
             ~/.buildozer
             ~/.gradle
-          key: buildozer-${{ hashFiles('buildozer.spec') }}
+          key: buildozer-v2-${{ hashFiles('buildozer.spec') }}
+
+      # A restored cache from an earlier, since-fixed-in-code failed run
+      # can still contain a half-built/broken other_builds/ directory for
+      # a specific recipe (reportlab's old broken C-accelerator build,
+      # or a pyjnius/pillow resolve that picked an unavailable version at
+      # the time) -- that stale, partially-built state persists across
+      # runs via actions/cache and can make the SAME recipe fail again
+      # even after the underlying cause is fixed, since p4a tries to
+      # resume from it instead of starting clean. Force those specific
+      # recipes to rebuild from scratch on every run, unconditionally --
+      # NDK/SDK/freetype/python3/kivy etc. from the cache are untouched
+      # and stay fast.
+      - name: Clear any stale pyjnius/reportlab/pillow build state from cache
+        run: |
+          find .buildozer -iregex ".*/other_builds/\(pyjnius\|reportlab\|pillow\).*" -exec rm -rf {} + 2>/dev/null
+          echo "done"
 
       # Build APK, with automatic retries around the whole step.
       #
       # WHY RETRY AT ALL: buildozer/python-for-android downloads several
       # C-library source tarballs (freetype, libffi, openssl, ...) from
       # various third-party mirrors mid-build, and also resolves pip
-      # packages (like pyjnius) from PyPI -- both are outside this
-      # repo's control and occasionally return transient errors (502s,
-      # "from versions: none" on an otherwise-real release, timeouts)
-      # that have nothing to do with this repo's code and usually
-      # resolve themselves within a minute or two.
+      # packages (like pyjnius, pillow) from PyPI -- both are outside
+      # this repo's control and occasionally return transient errors
+      # (502s, "from versions: none" on an otherwise-real release,
+      # timeouts) that have nothing to do with this repo's code and
+      # usually resolve themselves within a few minutes.
       #
       # WHY on_retry_command: a failed attempt can leave p4a's OWN build
       # state (under .buildozer/.../other_builds/<recipe>/) partially
       # written -- re-running the same build command against that
       # half-finished state doesn't just retry the thing that failed, it
       # can fail in a DIFFERENT, unrelated way on the next attempt
-      # (seen in practice: attempt 1 failed on a real pyjnius/reportlab
-      # problem, but attempts 2 and 3 then failed immediately with an
+      # (seen in practice: one failed attempt on a real pyjnius/reportlab
+      # problem, then later attempts failing immediately with an
       # unrelated "'NoneType' object has no attribute 'pip'" crash,
-      # because they inherited attempt 1's half-built state instead of
-      # starting clean). on_retry_command runs BEFORE each retry and
-      # wipes out just the pyjnius/reportlab build directories -- not
-      # the whole .buildozer cache -- so each retry gets a genuinely
-      # clean shot at the parts that broke, while NDK/SDK/freetype/etc.
-      # from a successful earlier stage stay cached and don't get
-      # re-downloaded.
+      # because they inherited the half-built state instead of starting
+      # clean). on_retry_command runs BEFORE each retry and wipes out
+      # just the pyjnius/reportlab/pillow build directories -- not the
+      # whole .buildozer cache -- so each retry gets a genuinely clean
+      # shot at the parts that broke, while NDK/SDK/freetype/etc. from a
+      # successful earlier stage stay cached and don't get re-downloaded.
       - name: Build APK
         uses: nick-fields/retry@v3
         env:
           PIP_CONSTRAINT: ${{ github.workspace }}/pip-constraints.txt
         with:
           timeout_minutes: 45
-          max_attempts: 3
-          retry_wait_seconds: 60
+          max_attempts: 5
+          retry_wait_seconds: 90
           on_retry_command: |
-            find .buildozer -type d -path "*/other_builds/pyjnius*" -exec rm -rf {} + 2>/dev/null
-            find .buildozer -type d -path "*/other_builds/reportlab*" -exec rm -rf {} + 2>/dev/null
-            echo "Cleaned partial pyjnius/reportlab build state before retrying."
+            find .buildozer -iregex ".*/other_builds/\(pyjnius\|reportlab\|pillow\).*" -exec rm -rf {} + 2>/dev/null
+            echo "Cleaned partial pyjnius/reportlab/pillow build state before retrying."
           command: |
             echo "pip==24.0" > pip-constraints.txt
             yes | buildozer -v android debug
