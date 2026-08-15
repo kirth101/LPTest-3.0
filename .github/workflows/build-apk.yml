@@ -37,19 +37,22 @@ jobs:
           pip install buildozer==1.5.0 cython==0.29.36 python-for-android==2024.1.21
 
       # python-for-android bundles its OWN "reportlab" recipe, which
-      # tries to compile reportlab's optional _rl_accel/_renderPM C
-      # accelerators from source -- and that compile is fundamentally
-      # broken under Python 3.11+ (CPython made PyFrameObject/struct
-      # _frame opaque; _rl_accel.c still pokes at its old internal
-      # layout directly). This is a known, confirmed, upstream p4a bug
-      # (kivy/python-for-android#2782) -- not something version-pinning
-      # or retrying fixes, since it's a genuine, deterministic compile
-      # error every time. The community-verified fix (confirmed working
-      # by the issue reporter): delete p4a's bundled reportlab recipe so
-      # p4a has no choice but to fall back to a plain `pip install
-      # reportlab` -- reportlab's own setup.py treats these C
-      # accelerators as optional and gracefully skips a failed one
-      # instead of aborting, which p4a's dedicated recipe does not do.
+      # ROOT CAUSE, finally confirmed: buildozer keeps its OWN isolated
+      # clone of python-for-android under
+      # .buildozer/android/platform/python-for-android/ -- separate from
+      # the pip-installed copy in this job's Python environment. Deleting
+      # the recipe from the pip-installed copy (below) and clearing
+      # p4a-recipes (further below) never reached THAT copy, which is why
+      # the broken reportlab recipe (hg.reportlab.com, 404) kept
+      # resurfacing no matter how thoroughly those two locations were
+      # cleaned. The actual, authoritative fix is
+      # p4a.blacklist_requirements = reportlab in buildozer.spec, p4a's
+      # own official "never use a recipe for this requirement, anywhere,
+      # always just pip install it" flag (--blacklist-requirements on the
+      # CLI) -- this can't be dodged by however many copies of p4a exist
+      # on disk. The two steps below are kept as harmless defense-in-depth
+      # (removing a directory that doesn't exist is a no-op) but are no
+      # longer what's actually fixing this.
       - name: Remove python-for-android's broken bundled reportlab recipe
         run: |
           python -c "
@@ -61,18 +64,6 @@ jobs:
           else:
               print('No bundled reportlab recipe found -- nothing to do.')
           "
-          # Nuke the ENTIRE local-recipes directory outright, no
-          # scanning/detection -- multiple attempts at detecting "the"
-          # reportlab recipe by name/content inside it (folder-name
-          # match, then __init__.py content match) both proved
-          # insufficient: the recipe kept being found and used with its
-          # broken hg.reportlab.com URL even after each check reported
-          # nothing to remove, meaning its `name` attribute lives
-          # somewhere this script wasn't looking (a different file in
-          # the recipe package, set dynamically, etc.). There's no
-          # evidence anything else in this repo depends on a local p4a
-          # recipe, so the reliable fix is to stop guessing and just
-          # ensure this directory is empty before every build.
           rm -rf p4a-recipes
           mkdir -p p4a-recipes
           echo "p4a-recipes cleared (kept as an empty directory)."
