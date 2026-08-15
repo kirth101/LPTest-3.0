@@ -92,11 +92,26 @@ jobs:
       # any cached dist to rebuild from scratch on every run,
       # unconditionally -- NDK/SDK/freetype/python3/kivy packages/ dir
       # from the cache are untouched and stay fast.
+      #
+      # This ALSO patches buildozer's own isolated clone of
+      # python-for-android under
+      # .buildozer/android/platform/python-for-android/ -- confirmed,
+      # after several failed attempts at fixing this via buildozer.spec
+      # options and pre-build deletions, to be the ACTUAL copy of p4a
+      # buildozer runs recipes from (separate from the pip-installed
+      # copy in this job's own Python environment, and NOT reachable via
+      # p4a.blacklist_requirements, which buildozer 1.5.0 silently drops
+      # instead of passing through to p4a -- confirmed by its total
+      # absence from the executed command in the build log). This clone
+      # doesn't exist until buildozer's first run creates it, so this
+      # step is a no-op the very first time (nothing to patch yet) and
+      # takes effect starting on the first retry.
       - name: Clear any stale pyjnius/reportlab/pillow build state and cached dists
         run: |
           mkdir -p .buildozer
           find .buildozer -iregex ".*/other_builds/\(pyjnius\|reportlab\|pillow\).*" -exec rm -rf {} + 2>/dev/null || true
           find .buildozer -type d -path "*/dists/*" -maxdepth 6 -exec rm -rf {} + 2>/dev/null || true
+          rm -rf .buildozer/android/platform/python-for-android/pythonforandroid/recipes/reportlab
           echo "done"
 
       # Build APK, with automatic retries around the whole step.
@@ -117,13 +132,15 @@ jobs:
       # retry the thing that failed, it can fail in a DIFFERENT,
       # unrelated way on the next attempt, or keep reusing stale
       # recipe/source info recorded in a cached dist even after the
-      # actual recipe files on disk have been fixed. on_retry_command
-      # runs BEFORE each retry and wipes out just the
-      # pyjnius/reportlab/pillow build directories and any cached dist --
-      # not the whole .buildozer cache -- so each retry gets a genuinely
-      # clean shot at the parts that broke, while NDK/SDK/freetype/etc.
-      # from a successful earlier stage stay cached and don't get
-      # re-downloaded.
+      # actual recipe files on disk have been fixed. It ALSO deletes
+      # buildozer's own isolated python-for-android reportlab recipe
+      # (see comment on the step above) -- that clone only gets created
+      # by buildozer's FIRST run, so attempt 1 is expected to still fail
+      # on reportlab's broken C-accelerator compile; this hook then
+      # removes that specific recipe before attempt 2, which is what
+      # actually fixes it. Everything already downloaded/built in
+      # attempt 1 (NDK, SDK, freetype, openssl, python3, ...) stays put
+      # and isn't redone.
       - name: Build APK
         uses: nick-fields/retry@v3
         env:
@@ -131,12 +148,13 @@ jobs:
         with:
           timeout_minutes: 45
           max_attempts: 5
-          retry_wait_seconds: 90
+          retry_wait_seconds: 30
           on_retry_command: |
             mkdir -p .buildozer
             find .buildozer -iregex ".*/other_builds/\(pyjnius\|reportlab\|pillow\).*" -exec rm -rf {} + 2>/dev/null || true
             find .buildozer -type d -path "*/dists/*" -maxdepth 6 -exec rm -rf {} + 2>/dev/null || true
-            echo "Cleaned partial pyjnius/reportlab/pillow build state and cached dists before retrying."
+            rm -rf .buildozer/android/platform/python-for-android/pythonforandroid/recipes/reportlab
+            echo "Cleaned partial build state, cached dists, and buildozer's own reportlab recipe before retrying."
           command: |
             echo "pip==24.0" > pip-constraints.txt
             yes | buildozer -v android debug
