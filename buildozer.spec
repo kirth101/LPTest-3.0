@@ -28,21 +28,18 @@ version = 1.0
 # here at all.
 #
 # IMPORTANT -- reportlab: python-for-android's bundled "reportlab"
-# recipe (present BOTH in the pip-installed pythonforandroid package
-# AND in buildozer's own isolated clone under
-# .buildozer/android/platform/python-for-android/ -- deleting one copy
-# does not remove the other) tries to compile reportlab's optional C
-# accelerators, which is fundamentally broken under Python 3.11+
-# (confirmed upstream bug, kivy/python-for-android#2782). Rather than
-# deleting recipe files (which turned out to not reliably reach every
-# copy p4a might use), p4a.blacklist_requirements below is p4a's own
-# official mechanism (--blacklist-requirements on the CLI) for saying
-# "never use ANY recipe for this requirement, no matter where one is
-# found -- always just pip install it" -- reportlab's own setup.py
-# correctly treats its C accelerators as optional and skips a failed
-# one rather than aborting the whole install. Don't remove this line
-# without putting some other fix in its place, or this will start
-# failing the same way again.
+# recipe tries to compile reportlab's optional C accelerators, which
+# is fundamentally broken under Python 3.11+ (confirmed upstream bug,
+# kivy/python-for-android#2782). p4a.blacklist_requirements below is
+# documented as p4a's own way to skip a recipe -- but buildozer 1.5.0
+# silently drops it instead of passing it to p4a (confirmed: absent
+# from the actual executed command in CI logs), so it's kept here as a
+# harmless no-op in case a future buildozer version honors it. The fix
+# that actually works is in build-apk.yml: it deletes this recipe
+# directly from buildozer's own isolated python-for-android clone
+# (.buildozer/android/platform/python-for-android/), which is the copy
+# actually used -- don't remove that step without something else in
+# its place, or this starts failing the same way again.
 p4a.blacklist_requirements = reportlab
 #
 # python3/hostpython3 MUST stay pinned to the same exact version, or the
