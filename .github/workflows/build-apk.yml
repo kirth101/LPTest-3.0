@@ -94,23 +94,29 @@ jobs:
           path: |
             ~/.buildozer
             ~/.gradle
-          key: buildozer-v2-${{ hashFiles('buildozer.spec') }}
+          key: buildozer-v3-${{ hashFiles('buildozer.spec') }}
 
       # A restored cache from an earlier, since-fixed-in-code failed run
       # can still contain a half-built/broken other_builds/ directory for
       # a specific recipe (reportlab's old broken C-accelerator build,
       # or a pyjnius/pillow resolve that picked an unavailable version at
-      # the time) -- that stale, partially-built state persists across
-      # runs via actions/cache and can make the SAME recipe fail again
-      # even after the underlying cause is fixed, since p4a tries to
-      # resume from it instead of starting clean. Force those specific
-      # recipes to rebuild from scratch on every run, unconditionally --
-      # NDK/SDK/freetype/python3/kivy etc. from the cache are untouched
-      # and stay fast.
-      - name: Clear any stale pyjnius/reportlab/pillow build state from cache
+      # the time), AND/OR a cached dists/<name>/ directory that recorded
+      # which recipe/source was used to build it during that earlier
+      # attempt -- p4a can reuse that recorded info instead of
+      # re-discovering recipes fresh from disk, which is how a recipe
+      # that's provably no longer present on disk (verified in the
+      # previous step) can still get used with its old, broken URL.
+      # That stale, partially-built state persists across runs via
+      # actions/cache and can make the SAME recipe fail again even after
+      # the underlying cause is fixed. Force those specific recipes AND
+      # any cached dist to rebuild from scratch on every run,
+      # unconditionally -- NDK/SDK/freetype/python3/kivy packages/ dir
+      # from the cache are untouched and stay fast.
+      - name: Clear any stale pyjnius/reportlab/pillow build state and cached dists
         run: |
           mkdir -p .buildozer
           find .buildozer -iregex ".*/other_builds/\(pyjnius\|reportlab\|pillow\).*" -exec rm -rf {} + 2>/dev/null || true
+          find .buildozer -type d -path "*/dists/*" -maxdepth 6 -exec rm -rf {} + 2>/dev/null || true
           echo "done"
 
       # Build APK, with automatic retries around the whole step.
@@ -125,19 +131,19 @@ jobs:
       # usually resolve themselves within a few minutes.
       #
       # WHY on_retry_command: a failed attempt can leave p4a's OWN build
-      # state (under .buildozer/.../other_builds/<recipe>/) partially
-      # written -- re-running the same build command against that
-      # half-finished state doesn't just retry the thing that failed, it
-      # can fail in a DIFFERENT, unrelated way on the next attempt
-      # (seen in practice: one failed attempt on a real pyjnius/reportlab
-      # problem, then later attempts failing immediately with an
-      # unrelated "'NoneType' object has no attribute 'pip'" crash,
-      # because they inherited the half-built state instead of starting
-      # clean). on_retry_command runs BEFORE each retry and wipes out
-      # just the pyjnius/reportlab/pillow build directories -- not the
-      # whole .buildozer cache -- so each retry gets a genuinely clean
-      # shot at the parts that broke, while NDK/SDK/freetype/etc. from a
-      # successful earlier stage stay cached and don't get re-downloaded.
+      # state (under .buildozer/.../other_builds/<recipe>/ and
+      # .buildozer/.../dists/<name>/) partially written -- re-running the
+      # same build command against that half-finished state doesn't just
+      # retry the thing that failed, it can fail in a DIFFERENT,
+      # unrelated way on the next attempt, or keep reusing stale
+      # recipe/source info recorded in a cached dist even after the
+      # actual recipe files on disk have been fixed. on_retry_command
+      # runs BEFORE each retry and wipes out just the
+      # pyjnius/reportlab/pillow build directories and any cached dist --
+      # not the whole .buildozer cache -- so each retry gets a genuinely
+      # clean shot at the parts that broke, while NDK/SDK/freetype/etc.
+      # from a successful earlier stage stay cached and don't get
+      # re-downloaded.
       - name: Build APK
         uses: nick-fields/retry@v3
         env:
@@ -149,7 +155,8 @@ jobs:
           on_retry_command: |
             mkdir -p .buildozer
             find .buildozer -iregex ".*/other_builds/\(pyjnius\|reportlab\|pillow\).*" -exec rm -rf {} + 2>/dev/null || true
-            echo "Cleaned partial pyjnius/reportlab/pillow build state before retrying."
+            find .buildozer -type d -path "*/dists/*" -maxdepth 6 -exec rm -rf {} + 2>/dev/null || true
+            echo "Cleaned partial pyjnius/reportlab/pillow build state and cached dists before retrying."
           command: |
             echo "pip==24.0" > pip-constraints.txt
             yes | buildozer -v android debug
