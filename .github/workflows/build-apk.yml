@@ -61,32 +61,21 @@ jobs:
           else:
               print('No bundled reportlab recipe found -- nothing to do.')
           "
-          # Also remove any local recipe that registers itself as
-          # "reportlab" regardless of what its containing folder is
-          # named (a plain `rm -rf p4a-recipes/reportlab` only catches
-          # a folder literally named that, and evidently isn't
-          # catching the actual one) -- a custom recipe pointing at
-          # hg.reportlab.com's archive URL 404s (that server doesn't
-          # serve tagged-version archives at that path), and per p4a's
-          # own docs, a pure-Python package like reportlab needs NO
-          # recipe at all -- it installs automatically via pip once
-          # neither the bundled nor a local recipe exists for it.
-          python -c "
-          import os, re, shutil
-          base = 'p4a-recipes'
-          if os.path.isdir(base):
-              for entry in sorted(os.listdir(base)):
-                  path = os.path.join(base, entry)
-                  init_file = os.path.join(path, '__init__.py')
-                  if not os.path.isfile(init_file):
-                      continue
-                  with open(init_file, 'r', errors='ignore') as f:
-                      content = f.read()
-                  if re.search(r'name\s*=\s*[\'\"]reportlab[\'\"]', content):
-                      shutil.rmtree(path)
-                      print(f'Removed local recipe registered as reportlab: {path}')
-          "
-          echo "Checked for local reportlab recipe overrides."
+          # Nuke the ENTIRE local-recipes directory outright, no
+          # scanning/detection -- multiple attempts at detecting "the"
+          # reportlab recipe by name/content inside it (folder-name
+          # match, then __init__.py content match) both proved
+          # insufficient: the recipe kept being found and used with its
+          # broken hg.reportlab.com URL even after each check reported
+          # nothing to remove, meaning its `name` attribute lives
+          # somewhere this script wasn't looking (a different file in
+          # the recipe package, set dynamically, etc.). There's no
+          # evidence anything else in this repo depends on a local p4a
+          # recipe, so the reliable fix is to stop guessing and just
+          # ensure this directory is empty before every build.
+          rm -rf p4a-recipes
+          mkdir -p p4a-recipes
+          echo "p4a-recipes cleared (kept as an empty directory)."
 
       - name: Cache buildozer / Android SDK-NDK
         uses: actions/cache@v4
@@ -94,7 +83,7 @@ jobs:
           path: |
             ~/.buildozer
             ~/.gradle
-          key: buildozer-v3-${{ hashFiles('buildozer.spec') }}
+          key: buildozer-v4-${{ hashFiles('buildozer.spec') }}
 
       # A restored cache from an earlier, since-fixed-in-code failed run
       # can still contain a half-built/broken other_builds/ directory for
