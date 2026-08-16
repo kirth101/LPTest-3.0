@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 import random
 import json
+import base64
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -254,6 +255,68 @@ def _format_questions(questions_data, text: str) -> list[dict]:
         except Exception:
             continue
     return formatted
+
+
+def generate_questions_from_images(
+    images: "list[bytes]",
+    proxy_url: str = DEFAULT_PROXY_URL,
+    app_token: str = DEFAULT_APP_TOKEN,
+    num_questions: int = 12,
+) -> "tuple[list[dict], str | None]":
+    """Generate MCQs directly from page images -- for a PDF whose pages
+    are scanned/photographed rather than real text (see
+    file_parser.py's page_images and the "This PDF looks like scanned
+    or photographed pages" case). Gemini reads handwritten/highlighted
+    notes directly, far better than traditional OCR would, and it's
+    all automatic: the user never has to find a separate OCR/scanning
+    app, re-export their file, or do anything else -- which matters a
+    lot for a blind user, who may not be able to easily use another
+    app's (possibly inaccessible) UI to turn OCR on.
+
+    Always goes through LPTest's own proxy (no direct-Gemini-key
+    equivalent for this path, unlike generate_questions_with_gemini --
+    keeping this one path simple, since the automatic zero-setup case
+    is what actually matters here). Same (questions, error) contract as
+    generate_questions_with_gemini: on ANY failure, questions is [] and
+    error is a short human-readable reason; never raises. There is
+    deliberately NO offline fallback for this path -- without a real
+    text layer there's nothing for the offline generator to work with
+    either, so a failure here should be reported plainly rather than
+    silently attempted offline and failing again with a confusing
+    "not enough text" message.
+    """
+    if not images:
+        return [], "No page images to read."
+    if not proxy_url or "YOUR-SUBDOMAIN" in proxy_url:
+        return [], "Online question generation isn't configured yet (proxy URL not set)."
+
+    b64_images = [base64.b64encode(img).decode("ascii") for img in images]
+
+    try:
+        resp = requests.post(
+            proxy_url,
+            headers={"X-App-Token": app_token, "Content-Type": "application/json"},
+            json={"images": b64_images, "num_questions": num_questions},
+            timeout=60,  # multiple images take longer to process than plain text
+        )
+    except requests.RequestException as e:
+        return [], f"Couldn't reach the question service ({type(e).__name__}: {e})"
+    if resp.status_code != 200:
+        try:
+            err_body = resp.json()
+            detail = err_body.get("error", resp.text[:200])
+        except Exception:
+            detail = resp.text[:200]
+        return [], f"Question service error: HTTP {resp.status_code} - {detail}"
+    try:
+        questions_data = resp.json()
+    except Exception as e:
+        return [], f"Question service returned an unexpected response ({e})"
+
+    formatted_questions = _format_questions(questions_data, "")
+    if not formatted_questions:
+        return [], "No usable questions were returned."
+    return formatted_questions, None
 
 
 def generate_questions_with_gemini(
