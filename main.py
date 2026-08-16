@@ -905,6 +905,15 @@ class LPTestApp(App):
         self.speech_rate = 1.0
         self.selected_tts_engine = "default"
         self.gemini_api_key = ""
+        # Online AI question generation is ON by default and needs NO
+        # setup: with no api_key set, generate_questions_with_gemini()
+        # automatically calls LPTest's own proxy server (see
+        # lptest-proxy/ in this repo), which holds the real Gemini key
+        # server-side. This toggle lets a user turn it off entirely
+        # (e.g. to always stay offline-only), and gemini_api_key above
+        # remains available as an optional override for a technical
+        # user who'd rather use their own Gemini key/quota directly.
+        self.ai_generation_enabled = True
         self._count_select_prompt = ""
         self._swipe_sound = None
 
@@ -983,12 +992,38 @@ class LPTestApp(App):
             color=FG, size_hint_y=None, height=dp(28)
         ))
 
-        content.add_widget(Label(text="Gemini API Key (for Online Module Generation):", font_size=sp(13),
-                                 color=MUTED, size_hint_y=None, height=dp(20), halign="left"))
+        content.add_widget(Label(
+            text="Online AI Questions: uses LPTest's built-in question "
+                 "service automatically, no setup needed. Turn off to "
+                 "always use offline questions instead.",
+            font_size=sp(12), color=MUTED, size_hint_y=None, height=dp(48),
+            halign="left", valign="top", text_size=(dp(280), None),
+        ))
+
+        ai_toggle_btn = PanelButton(
+            text=f"Online AI Questions: {'On' if self.ai_generation_enabled else 'Off'}",
+            bg_color=PURPLE, font_size=sp(14), height=dp(44),
+        )
+
+        def on_ai_toggle(*_):
+            self.ai_generation_enabled = not self.ai_generation_enabled
+            ai_toggle_btn.text = f"Online AI Questions: {'On' if self.ai_generation_enabled else 'Off'}"
+            self.speak(f"Online AI questions {'on' if self.ai_generation_enabled else 'off'}.")
+            update_settings_nav()
+
+        ai_toggle_btn.bind(on_release=on_ai_toggle)
+        content.add_widget(ai_toggle_btn)
+
+        content.add_widget(Label(
+            text="Your own Gemini API Key (optional \u2014 leave blank to "
+                 "use the built-in AI service above):",
+            font_size=sp(13), color=MUTED, size_hint_y=None, height=dp(34),
+            halign="left", valign="top", text_size=(dp(280), None),
+        ))
         
         api_input = TextInput(
             text=self.gemini_api_key,
-            hint_text="Enter Gemini API Key",
+            hint_text="Leave blank to use the built-in service",
             multiline=False,
             size_hint_y=None, height=dp(44),
             background_color=PANEL_BG, foreground_color=FG,
@@ -1052,7 +1087,9 @@ class LPTestApp(App):
 
         def update_settings_nav():
             content._set_voice_nav_items([
-                ("Gemini API key input field", None, api_input),
+                (f"Online AI Questions toggle. Currently {'on' if self.ai_generation_enabled else 'off'}",
+                 lambda: ai_toggle_btn.dispatch('on_release'), ai_toggle_btn),
+                ("Optional Gemini API key input field", None, api_input),
                 (f"Select Speech Engine. Currently {spinner.text}", lambda: spinner.dispatch('on_release'), spinner),
                 (f"Speech speed rate. Currently {self.speech_rate:.1f}x", None, slider),
                 ("Test Voice button", lambda: self.speak("Testing voice guidance audio."), test_btn),
@@ -1062,7 +1099,10 @@ class LPTestApp(App):
         update_settings_nav()
 
         popup.open()
-        self.speak("Settings opened. Configure Gemini API key or speech settings.")
+        self.speak(
+            "Settings opened. Online A I questions are on by default and need no setup. "
+            "Configure an optional Gemini API key or speech settings."
+        )
 
     def prompt_save_quiz_format(self):
         if not self.questions:
@@ -1420,22 +1460,31 @@ class LPTestApp(App):
                 Clock.schedule_once(lambda dt: self.offer_count_select(existing), 0)
                 return
 
-            if self.gemini_api_key:
-                self._set_status("Generating questions with Gemini \u2026")
-                questions, err = generate_questions_with_gemini(result.text, self.gemini_api_key)
+            if self.ai_generation_enabled:
+                self._set_status("Generating questions with AI \u2026")
+                # api_key=self.gemini_api_key or None: if the user hasn't
+                # entered their own key (the normal case -- this is empty
+                # by default), this automatically goes through LPTest's
+                # own built-in proxy service instead, with zero setup
+                # required. See generate_questions_with_gemini()'s
+                # docstring in question_generator.py.
+                questions, err = generate_questions_with_gemini(
+                    result.text, api_key=self.gemini_api_key or None
+                )
                 if questions:
-                    self.mode_note = note + "Questions generated via Google Gemini AI."
+                    self.mode_note = note + "Questions generated via AI."
                     Clock.schedule_once(lambda dt: self.offer_count_select(questions), 0)
                     return
-                # Gemini failed or returned nothing usable -- fall back to
-                # the offline generator below instead of dead-ending the
-                # user, but SAY so (both in the log and on screen) rather
-                # than silently switching modes with no explanation.
-                print(f"LPTest: Gemini generation failed ({path}): {err}")
-                self._set_status(f"Gemini unavailable ({err}) \u2014 using offline generator \u2026")
+                # AI generation failed or returned nothing usable -- fall
+                # back to the offline generator below instead of
+                # dead-ending the user, but SAY so (both in the log and
+                # on screen) rather than silently switching modes with no
+                # explanation.
+                print(f"LPTest: AI generation failed ({path}): {err}")
+                self._set_status(f"AI questions unavailable ({err}) \u2014 using offline generator \u2026")
                 Clock.schedule_once(
                     lambda dt, err=err: self.speak(
-                        f"Gemini was unavailable: {err}. Generating questions offline instead."
+                        f"Online questions were unavailable: {err}. Generating questions offline instead."
                     ), 0
                 )
 
