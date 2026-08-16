@@ -164,6 +164,10 @@ class _RoundIconButton(ButtonBehavior, Widget):
         self._bg_ellipse.size = self.size
 
 class HomeIconButton(_RoundIconButton):
+    def __init__(self, **kwargs):
+        kwargs.setdefault("bg_color", PURPLE)
+        super().__init__(**kwargs)
+
     def _build_lines(self):
         self._roof = Line(width=dp(2.5), cap="round", joint="round")
         self._base = Line(width=dp(2.5), cap="round", joint="round")
@@ -185,26 +189,30 @@ class HomeIconButton(_RoundIconButton):
         ]
 
 class SpeakIconButton(_RoundIconButton):
+    def __init__(self, **kwargs):
+        kwargs.setdefault("bg_color", PURPLE)
+        super().__init__(**kwargs)
+
     def _build_lines(self):
-        self._body = Line(width=dp(2.5), cap="round", joint="round", close=True)
-        self._wave1 = Line(width=dp(2.5), cap="round")
-        self._wave2 = Line(width=dp(2.5), cap="round")
+        self._body = Line(width=dp(2.2), cap="round", joint="round", close=True)
+        self._wave1 = Line(width=dp(2.2), cap="round")
+        self._wave2 = Line(width=dp(2.2), cap="round")
         return [self._body, self._wave1, self._wave2]
 
     def _redraw(self, *_a):
         super()._redraw()
         cx, cy = self.center_x, self.center_y
-        s = min(self.width, self.height) * 0.30
+        s = min(self.width, self.height) * 0.28
         self._body.points = [
-            cx - s, cy - s * 0.35,
-            cx - s * 0.4, cy - s * 0.35,
-            cx, cy - s * 0.9,
-            cx, cy + s * 0.9,
-            cx - s * 0.4, cy + s * 0.35,
-            cx - s, cy + s * 0.35,
+            cx - s * 0.7, cy - s * 0.3,
+            cx - s * 0.2, cy - s * 0.3,
+            cx + s * 0.5, cy - s * 0.8,
+            cx + s * 0.5, cy + s * 0.8,
+            cx - s * 0.2, cy + s * 0.3,
+            cx - s * 0.7, cy + s * 0.3,
         ]
-        self._wave1.circle = (cx + s * 0.15, cy, s * 0.55, -45, 45)
-        self._wave2.circle = (cx + s * 0.15, cy, s * 0.95, -45, 45)
+        self._wave1.circle = (cx + s * 0.6, cy, s * 0.45, -50, 50)
+        self._wave2.circle = (cx + s * 0.6, cy, s * 0.85, -50, 50)
 
 class GearIconButton(ButtonBehavior, Widget):
     def __init__(self, **kwargs):
@@ -783,7 +791,12 @@ class QuizScreen(VoiceNavMixin, Screen):
         root.add_widget(self.explanation_label)
 
         action_row = BoxLayout(size_hint_y=None, height=dp(54), spacing=dp(10))
-        self.next_btn = PanelButton(text="Next Question", bg_color=(0.4, 0.05, 0.85, 1), font_size=sp(20))
+        self.next_btn = PanelButton(
+            text="Next Question", 
+            bg_color=(0.25, 0.25, 0.3, 1), 
+            font_size=sp(20)
+        )
+        self.next_btn.disabled = True
         self.next_btn.bind(on_release=lambda *_: App.get_running_app().next_question())
         action_row.add_widget(self.next_btn)
         root.add_widget(action_row)
