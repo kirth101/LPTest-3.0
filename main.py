@@ -35,6 +35,7 @@ from question_generator import (
     detect_existing_qa,
     chunk_text,
     generate_questions_with_gemini,
+    generate_questions_from_images,
     generate_questions_offline,
 )
 import quiz_history
@@ -137,7 +138,7 @@ class CapsuleButton(Button):
     pass
 
 class _RoundIconButton(ButtonBehavior, Widget):
-    bg_color = ListProperty((0.086, 0.078, 0.129, 0)) # Set alpha to 0 for a transparent background!
+    bg_color = ListProperty(PURPLE_DARK)
 
     def __init__(self, **kwargs):
         kwargs.setdefault("size_hint", (None, None))
@@ -147,7 +148,7 @@ class _RoundIconButton(ButtonBehavior, Widget):
             self._bg_color_instr = Color(rgba=self.bg_color)
             self._bg_ellipse = Ellipse(pos=self.pos, size=self.size)
         with self.canvas.after:
-            Color(0.65, 0.35, 0.98, 1) # PURPLE_LIGHT for sleek, glowing icon lines
+            Color(0, 0, 0, 1) # Changed to black to match the reference design
             self._lines = self._build_lines()
         self.bind(pos=self._redraw, size=self._redraw, bg_color=self._recolor)
         self._redraw()
@@ -194,20 +195,16 @@ class SpeakIconButton(_RoundIconButton):
         super()._redraw()
         cx, cy = self.center_x, self.center_y
         s = min(self.width, self.height) * 0.30
-        
-        # Inayos ang coordinates para maging symmetrical at nakasentro ang megaphone
         self._body.points = [
-            cx - s * 0.7, cy + s * 0.3,   # Top-left ng base
-            cx - s * 0.3, cy + s * 0.3,   # Top-right ng base
-            cx + s * 0.2, cy + s * 0.7,   # Top ng cone
-            cx + s * 0.2, cy - s * 0.7,   # Bottom ng cone
-            cx - s * 0.3, cy - s * 0.3,   # Bottom-right ng base
-            cx - s * 0.7, cy - s * 0.3,   # Bottom-left ng base
+            cx - s, cy - s * 0.35,
+            cx - s * 0.4, cy - s * 0.35,
+            cx, cy - s * 0.9,
+            cx, cy + s * 0.9,
+            cx - s * 0.4, cy + s * 0.35,
+            cx - s, cy + s * 0.35,
         ]
-        
-        # Inayos din ang sound waves para saktong lumalabas galing sa cone
-        self._wave1.circle = (cx + s * 0.1, cy, s * 0.4, -40, 40)
-        self._wave2.circle = (cx + s * 0.1, cy, s * 0.7, -40, 40)
+        self._wave1.circle = (cx + s * 0.15, cy, s * 0.55, -45, 45)
+        self._wave2.circle = (cx + s * 0.15, cy, s * 0.95, -45, 45)
 
 class GearIconButton(ButtonBehavior, Widget):
     def __init__(self, **kwargs):
@@ -747,7 +744,18 @@ class QuizScreen(VoiceNavMixin, Screen):
             text = q["options"][i] if i < len(q["options"]) else ""
             label = f"{letters[i]} {text}"
             btn = OptionButton(text=label, font_size=sp(size))
-            # Tandaan: Baka nakalimutan mong idagdag ang button sa options_box dito
+            if locked:
+                if i == correct_idx:
+                    btn.text = f"{label}  (Correct)"
+                    btn.bg_color = GREEN
+                elif i == chosen:
+                    btn.text = f"{label}  (Your answer)"
+                    btn.bg_color = RED
+                else:
+                    btn.bg_color = PURPLE_DARK
+            else:
+                btn.bg_color = PURPLE_DARK
+                btn.bind(on_release=guarded_release(lambda app, idx=i: app.select_option(idx)))
             self.options_box.add_widget(btn)
             self.option_widgets.append(btn)
 
@@ -768,14 +776,10 @@ class QuizScreen(VoiceNavMixin, Screen):
             self.explanation_label.text = f"Explanation: {explanation_text}"
             
             self.next_btn.text = "Finish Quiz" if index == total - 1 else "Next Question"
-            self.next_btn.disabled = False
-            self.next_btn.bg_color = (0.4, 0.05, 0.85, 1)  # Highlighted purple state
         else:
-            # Idagdag ang default state kapag hindi pa locked ang tanong
-            self.next_btn.text = "Skip Question" # O kung ano mang default text mo
             self.status_label.text = ""
             self.explanation_label.text = ""
-            pass
+            self.next_btn.text = "Next Question"
 
         app = App.get_running_app()
         if not locked:
@@ -1450,6 +1454,33 @@ class LPTestApp(App):
             self.filepath = path
             self.current_quiz_filename = os.path.basename(path)
             note = (result.warning + "\n") if result.warning else ""
+
+            if result.page_images:
+                # Scanned/photographed pages (see file_parser.py) -- no
+                # text to search for existing Q&A in or hand to the
+                # offline generator; read the images directly instead.
+                # This is what lets a blind user go straight from "photo
+                # of handwritten notes" to a quiz with no separate OCR
+                # app (often inaccessible) and no manual re-export step.
+                self._set_status("Reading scanned pages with AI \u2026")
+                questions, err = generate_questions_from_images(result.page_images)
+                if questions:
+                    self.mode_note = note + "Questions generated by reading the scanned pages with AI."
+                    Clock.schedule_once(lambda dt: self.offer_count_select(questions), 0)
+                    return
+                # No offline fallback is possible here -- there's no
+                # extracted text for the offline generator to work
+                # with either, so a failure means telling the user
+                # plainly rather than quietly retrying into a confusing
+                # "not enough text" error.
+                print(f"LPTest: image-based generation failed ({path}): {err}")
+                Clock.schedule_once(
+                    lambda dt, err=err: self._fail_load(
+                        f"This looks like a scanned or photographed document, and reading "
+                        f"it needs an internet connection ({err}). Check your connection and try again."
+                    ), 0
+                )
+                return
 
             existing = detect_existing_qa(result.text)
             if existing:
