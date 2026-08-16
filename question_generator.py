@@ -177,6 +177,28 @@ def _finalize_question(question: str, options: list[str], correct_index: int, so
 # Gemini versions get retired -- see https://ai.google.dev/gemini-api/docs/models
 GEMINI_MODEL = "gemini-flash-latest"
 
+# LPTest's own proxy server (a small Cloudflare Worker -- see
+# lptest-proxy/ in this repo for its source + deploy instructions).
+# This is what makes online AI question generation work automatically
+# for every user, with ZERO setup: the real Gemini API key lives only
+# on that server, is never bundled into this app, and can't be
+# extracted by decompiling the APK.
+#
+# DEFAULT_APP_TOKEN is NOT a Gemini key -- it's a narrow-scope,
+# rotatable token that only unlocks the proxy's single
+# question-generation endpoint. Like any value embedded in a client
+# app, it CAN be extracted from the APK; what it buys us over shipping
+# the real key directly is a much smaller blast radius if that
+# happens (see worker.js's comment block): the proxy rate-limits it,
+# it can't be used for anything beyond generating quiz questions, and
+# it can be rotated independently of the real Gemini key by pushing an
+# app update, with zero disruption to anything else.
+#
+# After deploying your own copy of lptest-proxy/ (see its README),
+# replace these two placeholders with your Worker's URL and app token.
+DEFAULT_PROXY_URL = "https://lptest-gemini-proxy.lptest-alman001.workers.dev"
+DEFAULT_APP_TOKEN = "0a673f59-2b57-41a2-b121-2a243e9df87ccd2a5abe-e189-4d96-a5b1-f669b4b7dbd4"
+
 _QUESTION_SCHEMA = {
     "type": "ARRAY",
     "items": {
@@ -191,38 +213,11 @@ _QUESTION_SCHEMA = {
     },
 }
 
-def generate_questions_with_gemini(text: str, api_key: str) -> tuple[list[dict], Optional[str]]:
-    """Ask Gemini to generate MCQs from `text` via a direct REST API call
-    (using `requests`, already a proven dependency in this Android build)
-    -- deliberately NOT via the `google-generativeai` / `google-genai`
-    Python SDKs, since:
-      1. `google-generativeai` (the SDK this file used to import) was
-         permanently deprecated by Google on November 30, 2025 -- it's
-         no longer maintained at all.
-      2. Pulling in the newer `google-genai` SDK instead would add a
-         chain of new pip dependencies (httpx, pydantic, google-auth,
-         websockets, ...) that have never been proven to cross-compile
-         under python-for-android -- exactly the kind of fragile,
-         hard-to-diagnose Android build risk this project already hit
-         once with the `freetype` recipe. A plain REST call over
-         `requests` sidesteps that risk entirely.
-    "gemini-flash-latest" is a Google-maintained alias that always
-    points at their current recommended Flash model, so this doesn't
-    need to be hand-updated as specific model versions (like the old
-    hardcoded gemini-1.5-flash here before) get retired over time.
-    Returns (questions, error) -- on ANY failure (no package needed here
-    so that's not a failure mode, but: no key, network error, bad
-    response, zero usable items, ...) questions is [] and error is a
-    short human-readable reason; never raises.
-    """
-    if not text or not text.strip():
-        return [], "No text to generate questions from."
-    if not api_key or not api_key.strip():
-        return [], "Gemini API Key is missing."
 
-    prompt = f"""
+def _build_prompt(text: str, num_questions: int) -> str:
+    return f"""
 Act as a professional test creator and expert educator. Based on the following study text, research paper, or module,
-generate multiple-choice questions (MCQs) that test deep comprehension, key concepts, findings, and important details.
+generate {num_questions} multiple-choice questions (MCQs) that test deep comprehension, key concepts, findings, and important details.
 
 Return ONLY a JSON array of objects with this exact structure:
 [
@@ -238,38 +233,9 @@ Text to analyze:
 {text[:15000]}
 """
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "response_mime_type": "application/json",
-            "response_schema": _QUESTION_SCHEMA,
-        },
-    }
 
-    try:
-        resp = requests.post(url, params={"key": api_key}, json=payload, timeout=30)
-    except requests.RequestException as e:
-        return [], f"Gemini request failed ({type(e).__name__}: {e})"
-
-    if resp.status_code != 200:
-        # Google's error responses are themselves small JSON objects with
-        # a human-readable message -- surface that instead of just the
-        # status code where possible (e.g. "API key not valid").
-        try:
-            detail = resp.json().get("error", {}).get("message", resp.text[:200])
-        except Exception:
-            detail = resp.text[:200]
-        return [], f"Gemini API Error: HTTP {resp.status_code} - {detail}"
-
-    try:
-        data = resp.json()
-        raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
-        questions_data = json.loads(raw_text)
-    except Exception as e:
-        return [], f"Gemini returned an unexpected response ({type(e).__name__}: {e})"
-
-    formatted_questions = []
+def _format_questions(questions_data, text: str) -> list[dict]:
+    formatted = []
     for q in questions_data:
         try:
             if "question" not in q or "options" not in q or "correctIndex" not in q:
@@ -278,7 +244,7 @@ Text to analyze:
             correct_index = int(q["correctIndex"])
             if len(options) != 4 or not (0 <= correct_index < 4):
                 continue  # malformed item -- skip it, don't fail the whole batch
-            formatted_questions.append(_finalize_question(
+            formatted.append(_finalize_question(
                 question=str(q["question"]),
                 options=options,
                 correct_index=correct_index,
@@ -287,6 +253,99 @@ Text to analyze:
             ))
         except Exception:
             continue
+    return formatted
+
+
+def generate_questions_with_gemini(
+    text: str,
+    api_key: Optional[str] = None,
+    proxy_url: str = DEFAULT_PROXY_URL,
+    app_token: str = DEFAULT_APP_TOKEN,
+    num_questions: int = 12,
+) -> tuple[list[dict], Optional[str]]:
+    """Generate MCQs from `text`, online.
+
+    Default path (no api_key given): calls LPTest's own proxy server,
+    which holds the real Gemini key server-side -- this is what lets
+    the app work out of the box with no setup and no key ever bundled
+    into the APK. Deliberately NOT using the `google-generativeai` /
+    `google-genai` Python SDKs for the underlying Gemini call (that
+    logic lives server-side in the proxy anyway): `google-generativeai`
+    was permanently deprecated by Google on November 30, 2025, and
+    `google-genai` would pull in a dependency chain (httpx, pydantic,
+    google-auth, websockets, ...) never proven to cross-compile under
+    python-for-android -- exactly the kind of fragile Android build
+    risk this project already hit once with the `freetype` recipe.
+
+    Pass api_key to instead call Gemini directly with the CALLER'S OWN
+    key, bypassing the proxy entirely -- an optional escape hatch for
+    a technical user who'd rather use their own Gemini quota; off by
+    default. "gemini-flash-latest" is a Google-maintained alias that
+    always points at their current recommended Flash model, so this
+    doesn't need hand-updating as specific versions get retired.
+
+    Returns (questions, error) -- on ANY failure (network error, bad
+    response, zero usable items, proxy not yet configured, ...)
+    questions is [] and error is a short human-readable reason; never
+    raises.
+    """
+    if not text or not text.strip():
+        return [], "No text to generate questions from."
+
+    if api_key and api_key.strip():
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+        payload = {
+            "contents": [{"parts": [{"text": _build_prompt(text, num_questions)}]}],
+            "generationConfig": {
+                "response_mime_type": "application/json",
+                "response_schema": _QUESTION_SCHEMA,
+            },
+        }
+        try:
+            resp = requests.post(url, params={"key": api_key}, json=payload, timeout=30)
+        except requests.RequestException as e:
+            return [], f"Gemini request failed ({type(e).__name__}: {e})"
+        if resp.status_code != 200:
+            # Google's error responses are themselves small JSON objects
+            # with a human-readable message -- surface that instead of
+            # just the status code where possible (e.g. "API key not
+            # valid").
+            try:
+                detail = resp.json().get("error", {}).get("message", resp.text[:200])
+            except Exception:
+                detail = resp.text[:200]
+            return [], f"Gemini API Error: HTTP {resp.status_code} - {detail}"
+        try:
+            data = resp.json()
+            raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
+            questions_data = json.loads(raw_text)
+        except Exception as e:
+            return [], f"Gemini returned an unexpected response ({type(e).__name__}: {e})"
+    else:
+        if not proxy_url or "YOUR-SUBDOMAIN" in proxy_url:
+            return [], "Online question generation isn't configured yet (proxy URL not set)."
+        try:
+            resp = requests.post(
+                proxy_url,
+                headers={"X-App-Token": app_token, "Content-Type": "application/json"},
+                json={"text": text[:15000], "num_questions": num_questions},
+                timeout=30,
+            )
+        except requests.RequestException as e:
+            return [], f"Couldn't reach the question service ({type(e).__name__}: {e})"
+        if resp.status_code != 200:
+            try:
+                err_body = resp.json()
+                detail = err_body.get("error", resp.text[:200])
+            except Exception:
+                detail = resp.text[:200]
+            return [], f"Question service error: HTTP {resp.status_code} - {detail}"
+        try:
+            questions_data = resp.json()
+        except Exception as e:
+            return [], f"Question service returned an unexpected response ({e})"
+
+    formatted_questions = _format_questions(questions_data, text)
 
     if not formatted_questions:
         return [], "Gemini returned empty or invalid question structures."
