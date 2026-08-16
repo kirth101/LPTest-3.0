@@ -137,7 +137,7 @@ class CapsuleButton(Button):
     pass
 
 class _RoundIconButton(ButtonBehavior, Widget):
-    bg_color = ListProperty(PURPLE_DARK)
+    bg_color = ListProperty((0.086, 0.078, 0.129, 0)) # Set alpha to 0 for a transparent background!
 
     def __init__(self, **kwargs):
         kwargs.setdefault("size_hint", (None, None))
@@ -147,7 +147,7 @@ class _RoundIconButton(ButtonBehavior, Widget):
             self._bg_color_instr = Color(rgba=self.bg_color)
             self._bg_ellipse = Ellipse(pos=self.pos, size=self.size)
         with self.canvas.after:
-            Color(0, 0, 0, 1) # Changed to black to match the reference design
+            Color(0.65, 0.35, 0.98, 1) # PURPLE_LIGHT for sleek, glowing icon lines
             self._lines = self._build_lines()
         self.bind(pos=self._redraw, size=self._redraw, bg_color=self._recolor)
         self._redraw()
@@ -194,16 +194,20 @@ class SpeakIconButton(_RoundIconButton):
         super()._redraw()
         cx, cy = self.center_x, self.center_y
         s = min(self.width, self.height) * 0.30
+        
+        # Inayos ang coordinates para maging symmetrical at nakasentro ang megaphone
         self._body.points = [
-            cx - s, cy - s * 0.35,
-            cx - s * 0.4, cy - s * 0.35,
-            cx, cy - s * 0.9,
-            cx, cy + s * 0.9,
-            cx - s * 0.4, cy + s * 0.35,
-            cx - s, cy + s * 0.35,
+            cx - s * 0.7, cy + s * 0.3,   # Top-left ng base
+            cx - s * 0.3, cy + s * 0.3,   # Top-right ng base
+            cx + s * 0.2, cy + s * 0.7,   # Top ng cone
+            cx + s * 0.2, cy - s * 0.7,   # Bottom ng cone
+            cx - s * 0.3, cy - s * 0.3,   # Bottom-right ng base
+            cx - s * 0.7, cy - s * 0.3,   # Bottom-left ng base
         ]
-        self._wave1.circle = (cx + s * 0.15, cy, s * 0.55, -45, 45)
-        self._wave2.circle = (cx + s * 0.15, cy, s * 0.95, -45, 45)
+        
+        # Inayos din ang sound waves para saktong lumalabas galing sa cone
+        self._wave1.circle = (cx + s * 0.1, cy, s * 0.4, -40, 40)
+        self._wave2.circle = (cx + s * 0.1, cy, s * 0.7, -40, 40)
 
 class GearIconButton(ButtonBehavior, Widget):
     def __init__(self, **kwargs):
@@ -743,22 +747,7 @@ class QuizScreen(VoiceNavMixin, Screen):
             text = q["options"][i] if i < len(q["options"]) else ""
             label = f"{letters[i]} {text}"
             btn = OptionButton(text=label, font_size=sp(size))
-            if locked:
-                if i == correct_idx:
-                    btn.text = f"{label}  (Correct)"
-                    btn.bg_color = GREEN
-                elif i == chosen:
-                    btn.text = f"{label}  (Your answer)"
-                    btn.bg_color = RED
-                else:
-                    btn.bg_color = PURPLE_DARK
-            else:
-                btn.bg_color = PURPLE_DARK
-                btn.bind(on_release=guarded_release(lambda app, idx=i: app.select_option(idx)))
-            self.options_box.add_widget(btn)
-            self.option_widgets.append(btn)
-
-        if locked:
+	if locked:
             is_correct = chosen == correct_idx
             if is_correct:
                 self.status_label.text = "Correct, well done!"
@@ -775,10 +764,14 @@ class QuizScreen(VoiceNavMixin, Screen):
             self.explanation_label.text = f"Explanation: {explanation_text}"
             
             self.next_btn.text = "Finish Quiz" if index == total - 1 else "Next Question"
+            self.next_btn.disabled = False
+            self.next_btn.bg_color = (0.4, 0.05, 0.85, 1)  # Highlighted purple state
         else:
             self.status_label.text = ""
             self.explanation_label.text = ""
             self.next_btn.text = "Next Question"
+            self.next_btn.disabled = True
+            self.next_btn.bg_color = (0.2, 0.2, 0.2, 1)  # Dimmed, unhighlighted gray state
 
         app = App.get_running_app()
         if not locked:
