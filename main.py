@@ -548,8 +548,31 @@ class LandingScreen(VoiceNavMixin, Screen):
         toggle_row.add_widget(Widget())  
         root.add_widget(toggle_row)
 
-        self.status_label = Label(text="", font_size=sp(14), color=MUTED, size_hint_y=None, height=dp(20))
-        root.add_widget(self.status_label)
+        # A visible panel (not just a bare label) so loading/status/error
+        # text stands out clearly, and properly wraps instead of running
+        # off the edge of the screen and getting cut off -- exactly what
+        # was happening before (e.g. a Gemini error message silently
+        # truncated at "...ex" with no way to read the rest).
+        self.status_box = BoxLayout(
+            orientation="vertical", size_hint_y=None, height=0,
+            padding=[dp(14), dp(10), dp(14), dp(10)]
+        )
+        with self.status_box.canvas.before:
+            Color(*PANEL_BG)
+            self._status_box_bg = RoundedRectangle(radius=[dp(10)])
+        self.status_box.bind(
+            pos=self._update_status_box_bg, size=self._update_status_box_bg
+        )
+
+        self.status_label = Label(
+            text="", font_size=sp(14), color=MUTED, size_hint_y=None,
+            halign="center", valign="middle"
+        )
+        self.status_label.bind(width=lambda w, *_: setattr(w, "text_size", (w.width, None)))
+        self.status_label.bind(texture_size=self._on_status_label_texture_size)
+        self.status_box.add_widget(self.status_label)
+        root.add_widget(self.status_box)
+        self._status_dots_event = None
 
         prev_box = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(44), spacing=dp(6))
         prev_title = Label(text="Your Previous Quizzes", font_size=sp(19), bold=True,
@@ -576,7 +599,48 @@ class LandingScreen(VoiceNavMixin, Screen):
             ("Settings button", lambda: app().open_settings(), self.gear_btn),
         ])
 
+    def _update_status_box_bg(self, *_a):
+        self._status_box_bg.pos = self.status_box.pos
+        self._status_box_bg.size = self.status_box.size
+
+    def _on_status_label_texture_size(self, widget, texture_size):
+        # Grow/shrink the box to fit however many lines the current
+        # message actually wraps to (including collapsing to nothing
+        # when the message is cleared), instead of a fixed one-line
+        # height that clips or leaves awkward empty space.
+        widget.height = texture_size[1]
+        self.status_box.height = (texture_size[1] + dp(20)) if widget.text else 0
+
+    def set_status_loading(self, base_text: str):
+        """Distinct from a plain status message: shows an animated
+        "..." so it's visually obvious something is actively happening
+        (file parsing, an AI request that can legitimately take many
+        seconds) rather than the app looking stuck or frozen."""
+        self._stop_status_dots()
+        self.status_label.color = MUTED
+        dots = [""]
+
+        def _tick(_dt):
+            dots[0] = "." * ((len(dots[0]) % 3) + 1)
+            self.status_label.text = f"{base_text}{dots[0]}"
+
+        _tick(0)
+        self._status_dots_event = Clock.schedule_interval(_tick, 0.5)
+
+    def set_status_message(self, text: str, color=None):
+        """A final (non-loading) status message -- success note or
+        error -- replaces any running loading animation."""
+        self._stop_status_dots()
+        self.status_label.text = text
+        self.status_label.color = color if color is not None else MUTED
+
+    def _stop_status_dots(self):
+        if self._status_dots_event is not None:
+            self._status_dots_event.cancel()
+            self._status_dots_event = None
+
     def on_pre_enter(self, *_a):
+        self.upload_btn.disabled = False
         self.refresh_history()
 
     def refresh_history(self):
@@ -1401,8 +1465,8 @@ class LPTestApp(App):
         popup.open()
 
     def load_file(self, path: str):
-        self.landing.status_label.text = f"Reading {os.path.basename(path)} \u2026"
-        self.landing.status_label.color = MUTED
+        self.landing.upload_btn.disabled = True
+        self.landing.set_status_loading(f"Reading {os.path.basename(path)}")
         self.speak(f"Reading {os.path.basename(path)}. Please wait.")
         # File parsing and (when a Gemini key is set) the online
         # generation call can each take several seconds -- both run on
@@ -1413,20 +1477,18 @@ class LPTestApp(App):
         # prompt, on top of TalkBack/the UI simply looking hung.
         threading.Thread(target=self._load_file_worker, args=(path,), daemon=True).start()
 
-    def _set_status(self, text: str, color=None):
-        """Thread-safe status-label update. Clock.schedule_once is safe
-        to call from ANY thread -- it just queues the callback; the
+    def _set_status(self, text: str):
+        """Thread-safe status-label update -- still shows the animated
+        loading dots (this is for in-progress messages like "Generating
+        questions with AI", not a final result). Clock.schedule_once is
+        safe to call from ANY thread -- it just queues the callback; the
         callback itself always actually runs on the main Kivy thread,
         which is the only thread allowed to touch widgets."""
-        def _apply(_dt):
-            self.landing.status_label.text = text
-            if color is not None:
-                self.landing.status_label.color = color
-        Clock.schedule_once(_apply, 0)
+        Clock.schedule_once(lambda dt: self.landing.set_status_loading(text), 0)
 
     def _fail_load(self, message: str):
-        self.landing.status_label.text = message
-        self.landing.status_label.color = RED
+        self.landing.upload_btn.disabled = False
+        self.landing.set_status_message(message, color=RED)
         self.speak(message)
 
     def _load_file_worker(self, path: str):
@@ -1534,6 +1596,8 @@ class LPTestApp(App):
             Clock.schedule_once(lambda dt: self._fail_load("Something went wrong reading that file."), 0)
 
     def offer_count_select(self, questions: list[dict]):
+        self.landing.upload_btn.disabled = False
+        self.landing.set_status_message("")
         total = len(questions)
         self._pending_pool = questions
         if total <= PRESET_COUNTS[0]:
@@ -1643,7 +1707,7 @@ class LPTestApp(App):
         self.current_index = 0
         self.filepath = None
         self.current_quiz_filename = None
-        self.landing.status_label.text = ""
+        self.landing.set_status_message("")
         self.sm.current = "landing"
         self.speak("Back to home screen.")
 
