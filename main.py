@@ -747,7 +747,11 @@ class QuizScreen(VoiceNavMixin, Screen):
             text = q["options"][i] if i < len(q["options"]) else ""
             label = f"{letters[i]} {text}"
             btn = OptionButton(text=label, font_size=sp(size))
-	if locked:
+            # Tandaan: Baka nakalimutan mong idagdag ang button sa options_box dito
+            self.options_box.add_widget(btn)
+            self.option_widgets.append(btn)
+
+        if locked:
             is_correct = chosen == correct_idx
             if is_correct:
                 self.status_label.text = "Correct, well done!"
@@ -767,11 +771,11 @@ class QuizScreen(VoiceNavMixin, Screen):
             self.next_btn.disabled = False
             self.next_btn.bg_color = (0.4, 0.05, 0.85, 1)  # Highlighted purple state
         else:
+            # Idagdag ang default state kapag hindi pa locked ang tanong
+            self.next_btn.text = "Skip Question" # O kung ano mang default text mo
             self.status_label.text = ""
             self.explanation_label.text = ""
-            self.next_btn.text = "Next Question"
-            self.next_btn.disabled = True
-            self.next_btn.bg_color = (0.2, 0.2, 0.2, 1)  # Dimmed, unhighlighted gray state
+            pass
 
         app = App.get_running_app()
         if not locked:
