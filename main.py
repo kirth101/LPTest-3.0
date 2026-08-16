@@ -188,39 +188,18 @@ class HomeIconButton(_RoundIconButton):
             cx + s * 0.18, cy - s * 0.30, cx + s * 0.18, cy - s * 0.95,
         ]
 
-class SpeakIconButton(_RoundIconButton):
-    def __init__(self, **kwargs):
-        kwargs.setdefault("bg_color", PURPLE)
-        super().__init__(**kwargs)
+class SpeakIconButton:
+    pass
 
-    def _build_lines(self):
-        self._body = Line(width=dp(2.2), cap="round", joint="round", close=True)
-        self._wave1 = Line(width=dp(2.2), cap="round")
-        self._wave2 = Line(width=dp(2.2), cap="round")
-        return [self._body, self._wave1, self._wave2]
 
-    def _redraw(self, *_a):
-        super()._redraw()
-        cx, cy = self.center_x, self.center_y
-        s = min(self.width, self.height) * 0.28
-        self._body.points = [
-            cx - s * 0.7, cy - s * 0.3,
-            cx - s * 0.2, cy - s * 0.3,
-            cx + s * 0.5, cy - s * 0.8,
-            cx + s * 0.5, cy + s * 0.8,
-            cx - s * 0.2, cy + s * 0.3,
-            cx - s * 0.7, cy + s * 0.3,
-        ]
-        self._wave1.circle = (cx + s * 0.6, cy, s * 0.45, -50, 50)
-        self._wave2.circle = (cx + s * 0.6, cy, s * 0.85, -50, 50)
+class GearIconButton(ButtonBehavior, widget):
 
-class GearIconButton(ButtonBehavior, Widget):
     def __init__(self, **kwargs):
         kwargs.setdefault("size_hint", (None, None))
         kwargs.setdefault("size", (dp(44), dp(44)))
         super().__init__(**kwargs)
         with self.canvas.after:
-            Color(0.85, 0.85, 0.88, 1)
+            color(0.85, 0.85, 0.88, 1)
             self._ring = Line(width=dp(1.8))
             self._hub = Line(width=dp(1.5))
             self._teeth = [Line(width=dp(1.8), cap="round") for _ in range(8)]
@@ -229,6 +208,7 @@ class GearIconButton(ButtonBehavior, Widget):
 
     def _redraw(self, *_a):
         import math
+
         cx, cy = self.center_x, self.center_y
         r = min(self.width, self.height) * 0.24
         self._ring.circle = (cx, cy, r)
