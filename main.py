@@ -70,12 +70,13 @@ KV = """
     background_color: 0, 0, 0, 0
     canvas.before:
         Color:
-            rgba: self.bg_color
+            rgba: (self.bg_color[0], self.bg_color[1], self.bg_color[2], self.bg_color[3] * 0.35) if self.disabled else (min(self.bg_color[0] * 1.3 + 0.15, 1), min(self.bg_color[1] * 1.3 + 0.15, 1), min(self.bg_color[2] * 1.3 + 0.15, 1), self.bg_color[3])
         RoundedRectangle:
             pos: self.pos
             size: self.size
             radius: [dp(12)]
     color: 1, 1, 1, 1
+    disabled_color: 1, 1, 1, 0.6
     bold: True
     size_hint_y: None
     height: dp(54)
@@ -224,14 +225,14 @@ class SpeakIconButton(ButtonBehavior, Widget):
             cx - s * 0.7, cy - s * 0.4,
         ]
         self._wave1.points = [
-            cx + s * 1.1, cy - s * 0.4,
-            cx + s * 1.3, cy,
-            cx + s * 1.1, cy + s * 0.4,
+            cx + s * 0.5, cy - s * 0.35,
+            cx + s * 0.65, cy,
+            cx + s * 0.5, cy + s * 0.35,
         ]
         self._wave2.points = [
-            cx + s * 1.3, cy - s * 0.7,
-            cx + s * 1.6, cy,
-            cx + s * 1.3, cy + s * 0.7,
+            cx + s * 0.65, cy - s * 0.6,
+            cx + s * 0.85, cy,
+            cx + s * 0.65, cy + s * 0.6,
         ]
 
 
