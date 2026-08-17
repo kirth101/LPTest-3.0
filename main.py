@@ -188,18 +188,61 @@ class HomeIconButton(_RoundIconButton):
             cx + s * 0.18, cy - s * 0.30, cx + s * 0.18, cy - s * 0.95,
         ]
 
-class SpeakIconButton:
-    pass
+class SpeakIconButton(ButtonBehavior, Widget):
+    bg_color = ListProperty(PURPLE_DARK)
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("size_hint", (None, None))
+        kwargs.setdefault("size", (dp(48), dp(48)))
+        super().__init__(**kwargs)
+        with self.canvas.before:
+            self._bg_color_instr = Color(rgba=self.bg_color)
+            self._bg_ellipse = Ellipse(pos=self.pos, size=self.size)
+        with self.canvas.after:
+            Color(0, 0, 0, 1)
+            self._speaker_body = Line(width=dp(2), cap="round", joint="round")
+            self._wave1 = Line(width=dp(1.8), cap="round")
+            self._wave2 = Line(width=dp(1.8), cap="round")
+        self.bind(pos=self._redraw, size=self._redraw, bg_color=self._recolor)
+        self._redraw()
+
+    def _recolor(self, *_a):
+        self._bg_color_instr.rgba = self.bg_color
+
+    def _redraw(self, *_a):
+        self._bg_ellipse.pos = self.pos
+        self._bg_ellipse.size = self.size
+        cx, cy = self.center_x, self.center_y
+        s = min(self.width, self.height) * 0.28
+        self._speaker_body.points = [
+            cx - s * 0.7, cy - s * 0.4,
+            cx - s * 0.2, cy - s * 0.4,
+            cx + s * 0.3, cy - s * 0.9,
+            cx + s * 0.3, cy + s * 0.9,
+            cx - s * 0.2, cy + s * 0.4,
+            cx - s * 0.7, cy + s * 0.4,
+            cx - s * 0.7, cy - s * 0.4,
+        ]
+        self._wave1.points = [
+            cx + s * 1.1, cy - s * 0.4,
+            cx + s * 1.3, cy,
+            cx + s * 1.1, cy + s * 0.4,
+        ]
+        self._wave2.points = [
+            cx + s * 1.3, cy - s * 0.7,
+            cx + s * 1.6, cy,
+            cx + s * 1.3, cy + s * 0.7,
+        ]
 
 
-class GearIconButton(ButtonBehavior, widget):
+class GearIconButton(ButtonBehavior, Widget):
 
     def __init__(self, **kwargs):
         kwargs.setdefault("size_hint", (None, None))
         kwargs.setdefault("size", (dp(44), dp(44)))
         super().__init__(**kwargs)
         with self.canvas.after:
-            color(0.85, 0.85, 0.88, 1)
+            Color(0.85, 0.85, 0.88, 1)
             self._ring = Line(width=dp(1.8))
             self._hub = Line(width=dp(1.5))
             self._teeth = [Line(width=dp(1.8), cap="round") for _ in range(8)]
@@ -220,7 +263,6 @@ class GearIconButton(ButtonBehavior, widget):
             x2 = cx + math.cos(angle) * r * 1.55
             y2 = cy + math.sin(angle) * r * 1.55
             line.points = [x1, y1, x2, y2]
-
 class OptionButton(ButtonBehavior, Label):
     bg_color = ListProperty(PURPLE_DARK)
 
@@ -792,6 +834,11 @@ class QuizScreen(VoiceNavMixin, Screen):
         spoken_letters = ["A", "B", "C", "D"]
         self.progress_label.text = f"Question {index + 1} of {total}"
         self.question_label.text = q["question"]
+        # next_btn starts disabled (see __init__) so the user can't skip
+        # ahead before answering -- `locked` is True exactly once the
+        # current question has been answered, so this is the one place
+        # that needs to flip it back on again.
+        self.next_btn.disabled = not locked
 
         size = option_font_size(q["options"])
         self.options_box.clear_widgets()
