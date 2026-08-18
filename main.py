@@ -70,7 +70,7 @@ KV = """
     background_color: 0, 0, 0, 0
     canvas.before:
         Color:
-            rgba: (self.bg_color[0], self.bg_color[1], self.bg_color[2], self.bg_color[3] * 0.35) if self.disabled else (min(self.bg_color[0] * 1.3 + 0.15, 1), min(self.bg_color[1] * 1.3 + 0.15, 1), min(self.bg_color[2] * 1.3 + 0.15, 1), self.bg_color[3])
+            rgba: (self.bg_color[0] * 0.5, self.bg_color[1] * 0.5, self.bg_color[2] * 0.5, self.bg_color[3]) if self.disabled else self.bg_color
         RoundedRectangle:
             pos: self.pos
             size: self.size
@@ -816,7 +816,7 @@ class QuizScreen(VoiceNavMixin, Screen):
         action_row = BoxLayout(size_hint_y=None, height=dp(54), spacing=dp(10))
         self.next_btn = PanelButton(
             text="Next Question", 
-            bg_color=(0.25, 0.25, 0.3, 1), 
+            bg_color=PURPLE, 
             font_size=sp(20)
         )
         self.next_btn.disabled = True
