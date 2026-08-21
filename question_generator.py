@@ -198,7 +198,7 @@ GEMINI_MODEL = "gemini-flash-latest"
 # After deploying your own copy of lptest-proxy/ (see its README),
 # replace these two placeholders with your Worker's URL and app token.
 DEFAULT_PROXY_URL = "https://lptest-gemini-proxy.lptest-alman001.workers.dev"
-DEFAULT_APP_TOKEN = "0a673f59-2b57-41a2-b121-2a243e9df87ccd2a5abe-e189-4d96-a5b1-f669b4b7dbd4"
+DEFAULT_APP_TOKEN = "lHPMFRuzCC6LnOs6KqAjqEd6Nf294wgB_nzTqOKvCKY"
 
 _QUESTION_SCHEMA = {
     "type": "ARRAY",
