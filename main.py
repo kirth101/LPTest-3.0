@@ -70,7 +70,7 @@ KV = """
     background_color: 0, 0, 0, 0
     canvas.before:
         Color:
-            rgba: (self.bg_color[0] * 0.5, self.bg_color[1] * 0.5, self.bg_color[2] * 0.5, self.bg_color[3]) if self.disabled else self.bg_color
+            rgba: (self.bg_color[0], self.bg_color[1], self.bg_color[2], self.bg_color[3] * 0.35) if self.disabled else (min(self.bg_color[0] * 1.3 + 0.15, 1), min(self.bg_color[1] * 1.3 + 0.15, 1), min(self.bg_color[2] * 1.3 + 0.15, 1), self.bg_color[3])
         RoundedRectangle:
             pos: self.pos
             size: self.size
