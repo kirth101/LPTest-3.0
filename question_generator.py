@@ -70,10 +70,10 @@ _QLABEL_RE = re.compile(r"^\s*Q\s*[:.]\s*(.+)$", re.IGNORECASE)
 # "Question 1" / "Question 1:" / "Question 1: <text>" as its own header line
 # (question text may follow on the same line, or on the line(s) after it —
 # see the gathering loop in detect_existing_qa).
-_QHEADER_RE = re.compile(r"^\s*Question\s+\d+\s*[:.]?\s*(.*)$", re.IGNORECASE)
+_QHEADER_RE = re.compile(r"^\s*Question\s*[:.]?\s*\d+\s*[:.]?\s*(.*)$", re.IGNORECASE)
 # Accepts "A:", "Answer:", and "Correct Answer:" style lines.
 _ALABEL_RE = re.compile(r"^\s*(?:Correct\s+)?A(?:nswer)?\s*[:.]\s*(.+)$", re.IGNORECASE)
-_LETTER_OPT_RE = re.compile(r"^\s*([a-dA-D])[\.\)]\s*(.+)$")
+_LETTER_OPT_RE = re.compile(r"^\s*(?:Option\s+)?([a-dA-D])[\.\):]\s*(.+)$", re.IGNORECASE)
 _ANSWER_KEY_LINE_RE = re.compile(r"^\s*(\d+)\s*[\.\):-]\s*([a-dA-D])\s*$")
 # Pulls a leading option letter out of an answer line's remainder, e.g.
 # "Correct Answer: B. Abstract reasoning" -> letter "B", text "Abstract reasoning".
@@ -383,15 +383,19 @@ PROXY_MAX_QUESTIONS_PER_CALL = 20  # hard ceiling on the Worker's side -- reques
 PROXY_MAX_CALLS = 5                # caps how many of the Worker's daily-per-IP quota one upload can spend
 PROXY_MAX_TEXT_CHARS = 15000       # the Worker truncates to this per call regardless of what's sent
 
-MIN_TARGET_QUESTIONS = 10
+MIN_TARGET_QUESTIONS = 50
 MAX_TARGET_QUESTIONS = 100
 WORDS_PER_QUESTION = 15
 
 
 def target_question_count(text: str) -> int:
-    """How many questions to ask for, based on how much material there is.
-    Scales from MIN_TARGET_QUESTIONS up through the 50-100 "sweet spot" as
-    the source text gets longer."""
+    """How many questions to ask for. Always requests at least
+    MIN_TARGET_QUESTIONS (50) regardless of how short the source text is --
+    for AI generation this is just a request (the model does its best with
+    whatever material it's given); for the offline generator, the actual
+    number returned is still capped by how many genuinely distinct facts
+    exist in the text (see generate_questions()) rather than padded out
+    with repeats or low-quality filler."""
     word_count = len(text.split())
     if word_count == 0:
         return MIN_TARGET_QUESTIONS
@@ -579,7 +583,7 @@ def generate_questions_with_gemini(text: str, api_key: str) -> tuple[list[dict],
     if not api_key or not api_key.strip():
         return [], "Gemini API Key is missing. Add one via Settings first."
 
-    num_questions = min(target_question_count(text), 20)
+    num_questions = min(target_question_count(text), 50)  # single un-chunked call; higher risks a truncated/invalid JSON response
     prompt = f"""Act as a professional test creator and expert educator. Based on the following study text, research paper, or module, generate {num_questions} multiple-choice questions (MCQs) that test deep comprehension, key concepts, findings, and important details.
 
 Return ONLY a valid JSON array containing objects with this exact structure, with no markdown formatting outside:
