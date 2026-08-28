@@ -18,9 +18,11 @@ from kivy.core.window import Window
 from kivy.graphics import Color, Ellipse, Line, RoundedRectangle
 from kivy.lang import Builder
 from kivy.metrics import dp, sp
-from kivy.properties import ListProperty, StringProperty, BooleanProperty
+from kivy.properties import ListProperty, StringProperty, BooleanProperty, NumericProperty
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.button import Button
 from kivy.uix.filechooser import FileChooserListView
 from kivy.uix.label import Label
@@ -76,7 +78,7 @@ KV = """
     background_color: 0, 0, 0, 0
     canvas.before:
         Color:
-            rgba: (self.bg_color[0], self.bg_color[1], self.bg_color[2], self.bg_color[3] * 0.35) if self.disabled else (min(self.bg_color[0] * 1.3 + 0.15, 1), min(self.bg_color[1] * 1.3 + 0.15, 1), min(self.bg_color[2] * 1.3 + 0.15, 1), self.bg_color[3])
+            rgba: (self.bg_color[0], self.bg_color[1], self.bg_color[2], self.bg_color[3] * 0.35) if self.disabled else (self.bg_color[0] + (1 - self.bg_color[0]) * 0.08, self.bg_color[1] + (1 - self.bg_color[1]) * 0.08, self.bg_color[2] + (1 - self.bg_color[2]) * 0.08, self.bg_color[3])
         RoundedRectangle:
             pos: self.pos
             size: self.size
@@ -285,6 +287,89 @@ class OptionButton(ButtonBehavior, Label):
 
 class HistoryRow(BoxLayout):
     pass
+
+
+class CircularProgress(Widget):
+    """A ring that fills clockwise from the top as `value` (0-100) rises,
+    with the percentage drawn in its own center. Used by the Loading
+    overlay -- see App._show_loading()/_update_loading()."""
+    value = NumericProperty(0)
+    ring_color = ListProperty(PURPLE)
+    track_color = ListProperty((1, 1, 1, 0.12))
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("size_hint", (None, None))
+        kwargs.setdefault("size", (dp(96), dp(96)))
+        super().__init__(**kwargs)
+        with self.canvas:
+            Color(rgba=self.track_color)
+            self._track = Line(width=dp(6))
+            Color(rgba=self.ring_color)
+            self._arc = Line(width=dp(6), cap="round")
+        self.bind(pos=self._redraw, size=self._redraw, value=self._redraw)
+        self._redraw()
+
+    def _redraw(self, *_a):
+        cx, cy = self.center_x, self.center_y
+        r = min(self.width, self.height) / 2 - dp(4)
+        self._track.circle = (cx, cy, r)
+        pct = max(0, min(100, self.value))
+        # Starts at 12 o'clock (90°) and sweeps clockwise, matching how a
+        # loading ring conventionally fills.
+        angle_start = 90
+        angle_end = 90 - (360 * pct / 100)
+        if pct > 0:
+            self._arc.circle = (cx, cy, r, angle_end, angle_start)
+        else:
+            self._arc.circle = (cx, cy, r, 90, 90)
+
+
+class LoadingOverlay(Popup):
+    """Full-screen 'Please wait' overlay with a circular percentage
+    progress ring -- shown while a file is being read and turned into
+    questions (see App._show_loading()/_update_loading()/_hide_loading()).
+    A Popup (not a Screen) so it can sit on top of the Landing screen
+    without disturbing ScreenManager/BGM state underneath."""
+    def __init__(self, **kwargs):
+        super().__init__(
+            title="", separator_height=0, auto_dismiss=False,
+            size_hint=(1, 1), background="",
+            background_color=(0.02, 0.02, 0.04, 0.94),
+            **kwargs
+        )
+        root = BoxLayout(orientation="vertical", padding=dp(24), spacing=dp(16))
+        root.add_widget(Widget())
+
+        ring_anchor = AnchorLayout(anchor_x="center", size_hint_y=None, height=dp(130))
+        ring_wrap = FloatLayout(size_hint=(None, None), size=(dp(130), dp(130)))
+        self.ring = CircularProgress(size=(dp(130), dp(130)), pos_hint={"center_x": 0.5, "center_y": 0.5})
+        self.percent_label = Label(text="0%", font_size=sp(24), bold=True, color=FG,
+                                   size_hint=(None, None), size=(dp(130), dp(40)),
+                                   pos_hint={"center_x": 0.5, "center_y": 0.5})
+        ring_wrap.add_widget(self.ring)
+        ring_wrap.add_widget(self.percent_label)
+        ring_anchor.add_widget(ring_wrap)
+        root.add_widget(ring_anchor)
+
+        self.title_label = Label(text="Please wait\u2026", font_size=sp(20), bold=True,
+                                 color=FG, size_hint_y=None, height=dp(32))
+        root.add_widget(self.title_label)
+
+        self.status_label = Label(text="", font_size=sp(14), color=MUTED,
+                                  size_hint_y=None, height=dp(44),
+                                  halign="center", valign="top")
+        self.status_label.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
+        root.add_widget(self.status_label)
+
+        root.add_widget(Widget())
+        self.content = root
+
+    def set_progress(self, percent: float, status: str | None = None):
+        self.ring.value = max(0, min(100, percent))
+        self.percent_label.text = f"{int(self.ring.value)}%"
+        if status is not None:
+            self.status_label.text = status
+
 
 def option_font_size(options: list[str]) -> int:
     longest = max((len(o) for o in options), default=0)
@@ -1124,6 +1209,7 @@ class LPTestApp(App):
 
         self.sfx = SoundEffects()
         self.bgm = BGMPlayer()
+        self.loading_overlay = LoadingOverlay()
 
         try:
             self._swipe_sound = SoundLoader.load("swipe.wav")
@@ -1743,6 +1829,7 @@ class LPTestApp(App):
         self.landing.set_status_loading(f"Reading {os.path.basename(path)}")
         self.speak(f"Reading {os.path.basename(path)}. Please wait.")
         self.bgm.set_screen("loading")
+        self._show_loading(f"Reading {os.path.basename(path)}\u2026")
         # File parsing and (when a Gemini key is set) the online
         # generation call can each take several seconds -- both run on
         # a background thread now, NOT the main Kivy thread, so the UI
@@ -1751,6 +1838,20 @@ class LPTestApp(App):
         # ~5 seconds risks the OS showing an "app isn't responding"
         # prompt, on top of TalkBack/the UI simply looking hung.
         threading.Thread(target=self._load_file_worker, args=(path,), daemon=True).start()
+
+    def _show_loading(self, status: str = "Reading your file\u2026"):
+        self.loading_overlay.set_progress(0, status)
+        self.loading_overlay.open()
+
+    def _update_loading(self, percent: float, status: str | None = None):
+        """Thread-safe -- safe to call from the background worker thread
+        (_load_file_worker) as well as from the AI proxy's
+        progress_callback, which fires from its own worker threads (see
+        generate_questions_with_proxy in question_generator.py)."""
+        Clock.schedule_once(lambda dt: self.loading_overlay.set_progress(percent, status), 0)
+
+    def _hide_loading(self):
+        Clock.schedule_once(lambda dt: self.loading_overlay.dismiss(), 0)
 
     def _set_status(self, text: str):
         """Thread-safe status-label update -- still shows the animated
@@ -1762,6 +1863,7 @@ class LPTestApp(App):
         Clock.schedule_once(lambda dt: self.landing.set_status_loading(text), 0)
 
     def _fail_load(self, message: str):
+        self._hide_loading()
         self.landing.upload_btn.disabled = False
         self.landing.set_status_message(message, color=RED)
         self.sfx.play("error")
@@ -1810,12 +1912,14 @@ class LPTestApp(App):
                 error = result.error
                 Clock.schedule_once(lambda dt: self._fail_load(error), 0)
                 return
+            self._update_loading(20, "Reading text and pictures from the file\u2026")
 
             self.filepath = path
             self.current_quiz_filename = os.path.basename(path)
             note = (result.warning + "\n") if result.warning else ""
             has_text = len(result.text.strip()) >= 20
             Clock.schedule_once(lambda dt: self.sfx.play("upload_success"), 0)
+            self._update_loading(30, "Checking the file's own questions\u2026")
 
             # Picture-only upload (or a scanned page with no real text
             # layer, see file_parser.py) -- there's no text to search for
@@ -1844,11 +1948,16 @@ class LPTestApp(App):
                 def on_progress(done: int, total: int):
                     if total > 1:
                         self._set_status(f"Generating questions with AI \u2026 ({done}/{total})")
+                    pct = 35 + (55 * done / max(1, total))
+                    self._update_loading(pct, f"Generating questions with AI \u2026 ({done}/{total} batches)"
+                                          if total > 1 else "Generating questions with AI \u2026")
 
                 self._set_status(
                     "Reading the picture with AI \u2026" if not has_text
                     else "Generating questions with AI \u2026"
                 )
+                self._update_loading(35, "Reading the picture with AI \u2026" if not has_text
+                                      else "Generating questions with AI \u2026")
                 # api_key=self.gemini_api_key or None: if the user hasn't
                 # entered their own key (the normal case -- this is empty
                 # by default), this automatically goes through LPTest's
@@ -1866,6 +1975,7 @@ class LPTestApp(App):
                     )
                 if questions:
                     self.mode_note = note + "Questions generated via AI."
+                    self._update_loading(95, "Finishing up\u2026")
                     Clock.schedule_once(lambda dt: self.offer_count_select(questions), 0)
                     return
                 # AI generation failed or returned nothing usable. A
@@ -1908,6 +2018,7 @@ class LPTestApp(App):
                 return
 
             chunks = chunk_text(result.text, result.headings)
+            self._update_loading(60, "Generating questions offline\u2026")
             questions, skipped = generate_questions(chunks, result.text)
             if not questions:
                 Clock.schedule_once(
@@ -1917,6 +2028,7 @@ class LPTestApp(App):
                     ), 0
                 )
                 return
+            self._update_loading(95, "Finishing up\u2026")
 
             skip_note = f" ({len(skipped)} section(s) skipped.)" if skipped else ""
             self.mode_note = note + "Questions generated offline." + skip_note
@@ -1926,6 +2038,7 @@ class LPTestApp(App):
             Clock.schedule_once(lambda dt: self._fail_load("Something went wrong reading that file."), 0)
 
     def offer_count_select(self, questions: list[dict]):
+        self._hide_loading()
         self.landing.upload_btn.disabled = False
         self.landing.set_status_message("")
         self.sfx.play("generation_complete")
