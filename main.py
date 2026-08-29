@@ -23,6 +23,7 @@ from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.anchorlayout import AnchorLayout
+from kivy.uix.image import Image
 from kivy.uix.button import Button
 from kivy.uix.filechooser import FileChooserListView
 from kivy.uix.label import Label
@@ -43,6 +44,7 @@ from question_generator import (
     generate_questions_with_proxy,
     generate_questions_with_gemini,
     generate_questions,
+    verify_and_explain_with_proxy,
 )
 import quiz_history
 import quiz_package
@@ -617,23 +619,9 @@ class LandingScreen(VoiceNavMixin, Screen):
         root = BoxLayout(orientation="vertical", padding=[dp(24), dp(40), dp(24), dp(20)], spacing=dp(20))
         self.add_widget(root)
 
-        title_box = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(70), spacing=dp(4))
-        
-        t1 = Label(text="Welcome to ", font_size=sp(26), bold=True, color=PURPLE_LIGHT, size_hint_x=None, width=dp(145))
-        t2 = Label(text="LPTest", font_size=sp(26), bold=True, color=CYAN_ACCENT, size_hint_x=None, width=dp(95))
-        
-        header_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(36))
-        header_row.add_widget(Widget())  
-        header_row.add_widget(t1)
-        header_row.add_widget(t2)
-        header_row.add_widget(Widget())  
-        
-        subtitle = Label(text=f"Developed by {DEVELOPER_NAME}", font_size=sp(15),
-                         color=PURPLE_LIGHT, size_hint_y=None, height=dp(24), halign="center")
-        
-        title_box.add_widget(header_row)
-        title_box.add_widget(subtitle)
-        root.add_widget(title_box)
+        logo = Image(source="assets/logo.png", size_hint_y=None, height=dp(110),
+                    allow_stretch=True, keep_ratio=True)
+        root.add_widget(logo)
 
         root.add_widget(Widget(size_hint_y=None, height=dp(10)))
 
@@ -1870,6 +1858,44 @@ class LPTestApp(App):
         self.bgm.set_screen("landing")
         self.speak(message)
 
+    def _verify_and_offer(self, questions: list[dict], note: str, base_mode_note: str):
+        """Shared by both existing-Q&A paths in _load_file_worker below.
+        Even when the file already has its own complete questions, if AI
+        generation is on this still routes them through the proxy's
+        "verify" mode first -- confirming each marked answer and writing an
+        explanation (shown in the app's explanation panel) -- because a
+        bare right/wrong with no explanation is worth less for studying.
+        The question and option TEXT itself is never altered by this step
+        (see verify_and_explain_with_proxy's docstring). Falls back to the
+        questions exactly as extracted, with question and choice order
+        reshuffled for variety, if AI is off, unreachable, or fails outright
+        (e.g. no internet) -- in that case there's simply no AI-written
+        explanation, rather than blocking the quiz on a network problem."""
+        if self.ai_generation_enabled:
+            def on_progress(done: int, total: int):
+                if total > 1:
+                    self._set_status(f"Confirming answers with AI \u2026 ({done}/{total})")
+                pct = 40 + (50 * done / max(1, total))
+                self._update_loading(
+                    pct, f"Confirming answers with AI \u2026 ({done}/{total})" if total > 1
+                    else "Confirming answers and writing explanations with AI\u2026"
+                )
+
+            self._set_status("Confirming answers and writing explanations with AI\u2026")
+            self._update_loading(40, "Confirming answers and writing explanations with AI\u2026")
+            enriched, err = verify_and_explain_with_proxy(questions, progress_callback=on_progress)
+            if enriched:
+                self.mode_note = note + base_mode_note + " Confirmed and explained by AI."
+                self._update_loading(95, "Finishing up\u2026")
+                Clock.schedule_once(lambda dt: self.offer_count_select(enriched), 0)
+                return
+            print(f"LPTest: AI verification unavailable: {err}")
+            self._set_status(f"AI verification unavailable ({err}) \u2014 using your questions as-is\u2026")
+
+        self.mode_note = note + base_mode_note
+        shuffled = quiz_package.shuffle_for_replay(questions)
+        Clock.schedule_once(lambda dt: self.offer_count_select(shuffled), 0)
+
     def _load_file_worker(self, path: str):
         """Runs entirely off the main Kivy thread -- see load_file()'s
         comment for why. Every path back to the UI (status text,
@@ -1931,8 +1957,7 @@ class LPTestApp(App):
             if existing:
                 usable = [q for q in existing if q.get("correctIndex") is not None or q.get("_correct_text")]
                 if len(usable) >= len(existing):
-                    self.mode_note = note + "Using your file's own questions."
-                    Clock.schedule_once(lambda dt: self.offer_count_select(existing), 0)
+                    self._verify_and_offer(existing, note, "Using your file's own questions.")
                     return
                 # The file has its own questions, but some are missing
                 # options or a marked answer -- fill in ONLY the missing
@@ -1940,8 +1965,9 @@ class LPTestApp(App):
                 # skips anything it can't safely finish).
                 filled = fill_missing_pieces_offline(existing, result.text)
                 if filled:
-                    self.mode_note = note + "Using your file's own questions (some options were completed offline)."
-                    Clock.schedule_once(lambda dt: self.offer_count_select(filled), 0)
+                    self._verify_and_offer(
+                        filled, note, "Using your file's own questions (some options were completed offline)."
+                    )
                     return
 
             if self.ai_generation_enabled and (has_text or result.images):
