@@ -519,7 +519,11 @@ class VoiceNavMixin:
         self._voice_nav_items = normalized
         if reset_index or self._voice_nav_index >= len(normalized):
             self._voice_nav_index = 0
-        accessibility_bridge.update_nodes(normalized)
+        # Widgets were just created/added -- Kivy hasn't run its layout pass
+        # yet, so .x/.y/.width/.height can still be stale/placeholder values
+        # right now. Wait a frame so the real on-screen geometry is ready
+        # before computing the boxes TalkBack uses.
+        Clock.schedule_once(lambda dt: accessibility_bridge.update_nodes(normalized), 0)
 
     def _haptic(self, short: bool = True):
         _android_vibrate(0.02 if short else 0.045)
