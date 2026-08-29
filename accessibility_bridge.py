@@ -45,7 +45,7 @@ def _attach_on_ui_thread():
     def _do_attach():
         global _bridge, _click_listener
         try:
-            from jnius import autoclass, PythonJavaClass, java_method
+            from jnius import autoclass, cast, PythonJavaClass, java_method
             from kivy.clock import Clock
 
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
@@ -70,7 +70,12 @@ def _attach_on_ui_thread():
             click_listener = ClickListener()
             bridge.setClickListener(click_listener)
 
-            content = activity.getWindow().getDecorView().findViewById(AndroidRContentId)
+            # findViewById's Java signature returns a plain View, so pyjnius
+            # binds the result as a View even though it's really a
+            # ViewGroup/FrameLayout at runtime -- and plain View has no
+            # addView(). Cast it explicitly so the real method is visible.
+            raw_content = activity.getWindow().getDecorView().findViewById(AndroidRContentId)
+            content = cast("android.view.ViewGroup", raw_content)
             lp = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
             content.addView(bridge, lp)
 
