@@ -3,6 +3,10 @@ title = LPTest
 package.name = lptest
 package.domain = org.lptest
 
+icon.filename = %(source.dir)s/assets/icon.png
+presplash.filename = %(source.dir)s/assets/presplash.png
+presplash.color = #05020c
+
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,wav,mp3,ogg,json,txt
 
