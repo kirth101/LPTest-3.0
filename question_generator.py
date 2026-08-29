@@ -565,6 +565,114 @@ def generate_questions_with_proxy(
     return all_questions, None
 
 
+def verify_and_explain_with_proxy(
+    questions: list[dict], proxy_url: str = DEFAULT_PROXY_URL, app_token: str = DEFAULT_APP_TOKEN,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+) -> tuple[Optional[list[dict]], Optional[str]]:
+    """For questions that came from the file ITSELF (detect_existing_qa /
+    fill_missing_pieces_offline) rather than being generated -- sends them
+    to the proxy's "verify" mode, which double-checks each marked answer
+    and writes an explanation, WITHOUT generating anything new. Used so a
+    student gets a real explanation for their own reviewer questions
+    instead of just a bare right/wrong.
+
+    The question and option TEXT sent back by the model is deliberately
+    ignored -- only correctIndex and explanation are taken from its
+    response, keeping the app's own extracted text authoritative. This
+    protects against a model paraphrasing/altering a question that was
+    already correct as extracted, and means a validation failure (wrong
+    length, wrong shape) can only affect explanations/answer-correction,
+    never silently swap in AI-written question text.
+
+    Returns (enriched_questions, error). On total failure (e.g. no
+    internet), returns (None, error) -- the caller falls back to using
+    `questions` exactly as given. On partial failure (some batches failed,
+    matching this function's own batching -- see PROXY_MAX_QUESTIONS_PER_CALL),
+    still returns a full-length list; any question whose batch failed is
+    included unchanged (original correctIndex, no explanation) rather than
+    being dropped.
+    """
+    if not proxy_url or not app_token:
+        return None, "Online verification isn't configured (missing proxy URL/token)."
+    if not questions:
+        return None, "No questions to verify."
+
+    import concurrent.futures
+
+    # Only genuine 4-option multiple-choice items go through verification
+    # -- anything else (e.g. a Q:/A: free-text pair detect_existing_qa
+    # couldn't turn into options) isn't something this "verify" schema can
+    # represent, so it's carried through unchanged rather than dropped or
+    # sent to the model in a shape it can't use.
+    mc_indices = [i for i, q in enumerate(questions)
+                  if isinstance(q.get("options"), list) and len(q["options"]) == 4]
+    if not mc_indices:
+        return None, "No multiple-choice questions to verify."
+    mc_questions = [questions[i] for i in mc_indices]
+
+    def to_payload_item(q: dict) -> dict:
+        return {"question": q["question"], "options": q["options"], "correctIndex": q.get("correctIndex")}
+
+    batches = [mc_questions[i:i + PROXY_MAX_QUESTIONS_PER_CALL]
+               for i in range(0, len(mc_questions), PROXY_MAX_QUESTIONS_PER_CALL)]
+
+    results: list[tuple[int, Optional[list], Optional[str]]] = []
+    completed = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(batches)) as pool:
+        futures = {
+            pool.submit(_proxy_post, proxy_url, app_token,
+                        {"mode": "verify", "questions": [to_payload_item(q) for q in batch]}): idx
+            for idx, batch in enumerate(batches)
+        }
+        for future in concurrent.futures.as_completed(futures):
+            idx = futures[future]
+            completed += 1
+            if progress_callback:
+                try:
+                    progress_callback(completed, len(batches))
+                except Exception:
+                    pass
+            verified, err = future.result()
+            results.append((idx, verified, err))
+
+    results.sort(key=lambda r: r[0])
+    verified_by_position: dict[int, dict] = {}
+    any_success = False
+    errors: list[str] = []
+    for batch_idx, verified, err in results:
+        batch = batches[batch_idx]
+        batch_start = sum(len(b) for b in batches[:batch_idx])
+        if verified and len(verified) == len(batch):
+            any_success = True
+            for offset, (original, v) in enumerate(zip(batch, verified)):
+                q = dict(original)
+                v_idx = v.get("correctIndex") if isinstance(v, dict) else None
+                if isinstance(v_idx, int) and 0 <= v_idx < len(q.get("options", [])):
+                    q["correctIndex"] = v_idx
+                if isinstance(v, dict) and v.get("explanation"):
+                    q["explanation"] = v["explanation"]
+                verified_by_position[batch_start + offset] = q
+        else:
+            if err:
+                errors.append(err)
+            # This batch's verification failed -- keep those questions
+            # unchanged rather than dropping them.
+            for offset, original in enumerate(batch):
+                verified_by_position[batch_start + offset] = dict(original)
+
+    if not any_success:
+        return None, "; ".join(dict.fromkeys(errors)) if errors else "Verification service unavailable."
+
+    enriched = list(questions)  # non-MC items stay exactly as given, at their original positions
+    for mc_pos, q_idx in enumerate(mc_indices):
+        result_q = verified_by_position.get(mc_pos)
+        if result_q is not None:
+            result_q.pop("_qnum", None)
+            result_q.pop("_correct_text", None)
+            enriched[q_idx] = result_q
+    return enriched, None
+
+
 # ---------------------------------------------------------------------------
 # 4. Direct Gemini call -- optional escape hatch for a technical user who'd
 #    rather use their OWN key, bypassing the proxy entirely. Off by default.
