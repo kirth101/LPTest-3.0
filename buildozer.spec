@@ -73,6 +73,15 @@ android.ndk = 25b
 
 android.archs = arm64-v8a, armeabi-v7a
 
+# Custom Java bridge (android_src/org/lptest/lptest/AccessibilityBridge.java)
+# that exposes the app's Kivy-drawn widgets to TalkBack/Switch Access/etc,
+# since Kivy renders everything itself and has no native Views for
+# Android's accessibility framework to inspect on its own. See
+# accessibility_bridge.py for the Python-side glue.
+android.add_src = android_src
+android.enable_androidx = True
+android.gradle_dependencies = androidx.customview:customview:1.1.0
+
 log_level = 2
 warn_on_root = 1
 
