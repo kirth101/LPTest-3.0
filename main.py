@@ -48,6 +48,7 @@ from question_generator import (
 )
 import quiz_history
 import quiz_package
+import accessibility_bridge
 
 # ---------------------------------------------------------------------------
 # Palette — Purple / Cyan / Dark Theme (Matching Reference UI)
@@ -518,6 +519,7 @@ class VoiceNavMixin:
         self._voice_nav_items = normalized
         if reset_index or self._voice_nav_index >= len(normalized):
             self._voice_nav_index = 0
+        accessibility_bridge.update_nodes(normalized)
 
     def _haptic(self, short: bool = True):
         _android_vibrate(0.02 if short else 0.045)
@@ -531,6 +533,7 @@ class VoiceNavMixin:
                 self._haptic(short=True)
             label, _callback, _widget = self._voice_nav_items[index]
             App.get_running_app().speak(label)
+            accessibility_bridge.set_focus(index)
 
     def _voice_nav_move(self, delta: int):
         if not self._voice_nav_items:
@@ -544,6 +547,7 @@ class VoiceNavMixin:
         self._haptic(short=False)
         App.get_running_app().play_swipe_sound()
         _label, callback, _widget = self._voice_nav_items[self._voice_nav_index]
+        accessibility_bridge.announce_click(self._voice_nav_index)
         if callback:
             callback()
 
@@ -1155,6 +1159,7 @@ class LPTestApp(App):
     def build(self):
         if platform == "android":
             _AndroidTTS._get_engine()
+            accessibility_bridge.attach()
 
         self.questions: list[dict] = []
         self.user_answers: list = []
