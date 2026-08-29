@@ -8,6 +8,14 @@ Everything here is a safe no-op on non-Android platforms, or if the
 overlay failed to attach for any reason (old device, missing androidx
 dep, etc) -- the app's existing custom VoiceNavMixin swipe/TTS
 navigation keeps working exactly as before either way.
+
+IMPORTANT: Android requires that anything touching a View (creating it,
+adding it to the hierarchy, or asking it to dispatch an accessibility
+event) run on the Android UI thread specifically -- not just "some
+thread", and NOT Kivy's own Clock/event-loop thread, which is a
+different thread under the SDL2 bootstrap. Every function below that
+touches `_bridge` hops onto the UI thread via @run_on_ui_thread before
+doing so.
 """
 from kivy.utils import platform
 
@@ -20,43 +28,59 @@ _attached = False
 def attach():
     """Create the overlay and add it on top of the Activity's content view.
     Call once, e.g. from LPTestApp.build() alongside _AndroidTTS._get_engine()."""
-    global _bridge, _click_listener, _attached
+    global _attached
     if platform != "android" or _attached:
         return
+    _attached = True
     try:
-        from jnius import autoclass, PythonJavaClass, java_method
-        from kivy.clock import Clock
-
-        PythonActivity = autoclass("org.kivy.android.PythonActivity")
-        Bridge = autoclass("org.lptest.lptest.AccessibilityBridge")
-        LayoutParams = autoclass("android.view.ViewGroup$LayoutParams")
-        AndroidRContentId = autoclass("android.R$id").content
-
-        activity = PythonActivity.mActivity
-        _bridge = Bridge(activity)
-
-        class ClickListener(PythonJavaClass):
-            __javainterfaces__ = ["org/lptest/lptest/AccessibilityBridge$ClickListener"]
-            __javacontext__ = "app"
-
-            @java_method("(I)V")
-            def onNodeClicked(self, index):
-                # Called on the Android UI thread; hop back onto Kivy's
-                # own clock/thread before touching any Kivy widgets.
-                Clock.schedule_once(lambda *_a: _dispatch_click(index), 0)
-
-        _click_listener = ClickListener()
-        _bridge.setClickListener(_click_listener)
-
-        def _add_overlay(*_a):
-            content = activity.getWindow().getDecorView().findViewById(AndroidRContentId)
-            lp = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
-            content.addView(_bridge, lp)
-
-        Clock.schedule_once(_add_overlay, 0)
-        _attached = True
+        _attach_on_ui_thread()
     except Exception as e:
         print(f"LPTest: accessibility bridge attach failed: {e}")
+
+
+def _attach_on_ui_thread():
+    from android.runnable import run_on_ui_thread  # noqa: local import, Android-only module
+
+    @run_on_ui_thread
+    def _do_attach():
+        global _bridge, _click_listener
+        try:
+            from jnius import autoclass, PythonJavaClass, java_method
+            from kivy.clock import Clock
+
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            Bridge = autoclass("org.lptest.lptest.AccessibilityBridge")
+            LayoutParams = autoclass("android.view.ViewGroup$LayoutParams")
+            AndroidRContentId = autoclass("android.R$id").content
+
+            activity = PythonActivity.mActivity
+            bridge = Bridge(activity)
+
+            class ClickListener(PythonJavaClass):
+                __javainterfaces__ = ["org/lptest/lptest/AccessibilityBridge$ClickListener"]
+                __javacontext__ = "app"
+
+                @java_method("(I)V")
+                def onNodeClicked(self, index):
+                    # This callback itself already runs on the Android UI
+                    # thread (Android calls it); hop back onto Kivy's own
+                    # thread before touching any Kivy widgets/callbacks.
+                    Clock.schedule_once(lambda *_a: _dispatch_click(index), 0)
+
+            click_listener = ClickListener()
+            bridge.setClickListener(click_listener)
+
+            content = activity.getWindow().getDecorView().findViewById(AndroidRContentId)
+            lp = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+            content.addView(bridge, lp)
+
+            # Only publish the globals once fully wired up and attached.
+            _click_listener = click_listener
+            _bridge = bridge
+        except Exception as e:
+            print(f"LPTest: accessibility bridge attach (UI thread) failed: {e}")
+
+    _do_attach()
 
 
 def _dispatch_click(index):
@@ -83,36 +107,75 @@ def update_nodes(items):
     global _active_callbacks
     if platform != "android" or _bridge is None:
         return
+    _active_callbacks = [cb for (_label, cb, _widget) in items]
     try:
-        from jnius import autoclass
-        ArrayList = autoclass("java.util.ArrayList")
-        Node = autoclass("org.lptest.lptest.AccessibilityBridge$Node")
-
-        _active_callbacks = [cb for (_label, cb, _widget) in items]
-        java_nodes = ArrayList()
-        for label, _callback, widget in items:
-            if widget is None:
-                continue
-            left, top, right, bottom = kivy_widget_to_android_rect(widget)
-            java_nodes.add(Node(str(label), left, top, right, bottom, True))
-        _bridge.setNodes(java_nodes)
+        _update_nodes_on_ui_thread(items)
     except Exception as e:
         print(f"LPTest: accessibility bridge update_nodes failed: {e}")
+
+
+def _update_nodes_on_ui_thread(items):
+    from android.runnable import run_on_ui_thread
+
+    @run_on_ui_thread
+    def _do_update():
+        try:
+            from jnius import autoclass
+            ArrayList = autoclass("java.util.ArrayList")
+            Node = autoclass("org.lptest.lptest.AccessibilityBridge$Node")
+
+            java_nodes = ArrayList()
+            for label, _callback, widget in items:
+                if widget is None:
+                    continue
+                left, top, right, bottom = kivy_widget_to_android_rect(widget)
+                java_nodes.add(Node(str(label), left, top, right, bottom, True))
+            _bridge.setNodes(java_nodes)
+        except Exception as e:
+            print(f"LPTest: accessibility bridge update_nodes (UI thread) failed: {e}")
+
+    _do_update()
 
 
 def set_focus(index):
     if platform != "android" or _bridge is None:
         return
     try:
-        _bridge.setFocusedIndex(index)
+        _set_focus_on_ui_thread(index)
     except Exception as e:
         print(f"LPTest: accessibility bridge set_focus failed: {e}")
+
+
+def _set_focus_on_ui_thread(index):
+    from android.runnable import run_on_ui_thread
+
+    @run_on_ui_thread
+    def _do_focus():
+        try:
+            _bridge.setFocusedIndex(index)
+        except Exception as e:
+            print(f"LPTest: accessibility bridge set_focus (UI thread) failed: {e}")
+
+    _do_focus()
 
 
 def announce_click(index):
     if platform != "android" or _bridge is None:
         return
     try:
-        _bridge.announceClick(index)
+        _announce_click_on_ui_thread(index)
     except Exception as e:
         print(f"LPTest: accessibility bridge announce_click failed: {e}")
+
+
+def _announce_click_on_ui_thread(index):
+    from android.runnable import run_on_ui_thread
+
+    @run_on_ui_thread
+    def _do_announce():
+        try:
+            _bridge.announceClick(index)
+        except Exception as e:
+            print(f"LPTest: accessibility bridge announce_click (UI thread) failed: {e}")
+
+    _do_announce()
